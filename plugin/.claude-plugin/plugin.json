@@ -17,7 +17,7 @@
       "args": [
         "toolbox-server@1.10.0",
         "--config",
-        "autoctx/tools.yaml",
+        ".context-engineering/tools.yaml",
         "--stdio"
       ]
     }
