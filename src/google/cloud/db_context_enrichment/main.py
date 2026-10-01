@@ -5,7 +5,7 @@ from fastmcp import FastMCP
 
 from google.cloud.db_context_enrichment.common import (
     context_mutator,
-    context_store_client,
+    context_set_mcp_client,
     context_validator,
 )
 from google.cloud.db_context_enrichment.dataset import (
@@ -220,65 +220,128 @@ def generate_upload_url(
 
 @mcp.tool
 def upload_context_set(
-    local_file_path: str,
-    project_id: str,
-    csg_id: str,
-    cs_id: str,
-    version: str,
+    context_set: str,
+    context_payload: str | None = None,
+    local_file_path: str | None = None,
+    description: str | None = None,
 ) -> str:
-    """
-    Upload a local ContextSet JSON file to the Context Store.
+    """Uploads a context set to Dataplex OneMCP.
 
-    Resource hierarchy: a ContextSetGroup (CSG) is a logical container that
-    holds versioned ContextSets — typically one CSG per experiment, one
-    cs_id per lineage (eg. "autoctx"), and versions like "v0", "v1", "v2".
-
-    The CSG and the (cs_id, version) ContextSet resource are created if they
-    don't already exist; then the file contents are written as the
-    ContextSet body. Re-uploading the same (csg_id, cs_id, version)
-    overwrites the body.
+    Accepts either a stringified JSON 'context_payload' directly or a
+    'local_file_path' to a ContextSet JSON file.
 
     Args:
-        local_file_path: Absolute path to a ContextSet JSON file.
-        project_id: GCP project where the CSG / CS should live. Typically
-            the same project the target DB lives in.
-        csg_id: ContextSetGroup ID (eg. an experiment name).
-        cs_id: ContextSet ID (eg. "autoctx"). Stable across versions.
-        version: Version label (eg. "baseline", "v1").
+        context_set: Canonical resource name (format:
+            projects/{project}/locations/{location}/contextSets/{context_set}).
+        context_payload: Optional stringified JSON payload content of the ContextSet.
+        local_file_path: Optional path to a local ContextSet JSON file.
+        description: Optional description of the context set.
 
     Returns:
-        Full ContextSet resource name, eg.
-        `projects/<p>/locations/<l>/contextSetGroups/<csg_id>/contextSets/<cs_id>@<version>`.
+        JSON string result from the OneMCP tool.
     """
-    text = pathlib.Path(local_file_path).read_text()
-    ctx = context.ContextSet.model_validate_json(text)
-    client = context_store_client.ContextStoreClient()
-    cs_resource_name = client.ensure_context_set(project_id, csg_id, cs_id, version)
-    client.upload_context_set(cs_resource_name, ctx)
-    return cs_resource_name
+    if not context_payload and not local_file_path:
+        raise ValueError(
+            "Either 'context_payload' or 'local_file_path' must be provided to upload_context_set."
+        )
+
+    if local_file_path:
+        text = pathlib.Path(local_file_path).read_text()
+        ctx = context.ContextSet.model_validate_json(text)
+        context_payload = ctx.model_dump_json(exclude_none=True)
+
+    client = context_set_mcp_client.ContextSetMcpClient()
+    res = client.upload_context_set(context_set, context_payload, description or "")
+    return json.dumps(res)
 
 
 @mcp.tool
-def download_context_set(cs_resource_name: str, output_file_path: str) -> str:
-    """
-    Download a ContextSet from the Context Store and write it to a local
-    JSON file. Parent directories are created as needed; the output file
-    is overwritten if it exists.
+def get_context_set(context_set: str) -> str:
+    """Gets a context set from Dataplex OneMCP.
 
     Args:
-        cs_resource_name: Full ContextSet resource name, eg.
-            `projects/<p>/locations/<l>/contextSetGroups/<csg_id>/contextSets/<cs_id>@<version>`.
-        output_file_path: Absolute path where the JSON file should be written.
+        context_set: Canonical resource name (format:
+            projects/{project}/locations/{location}/contextSets/{context_set}).
 
     Returns:
-        The output file path.
+        JSON string result from the OneMCP tool containing the context payload.
     """
-    client = context_store_client.ContextStoreClient()
-    ctx = client.download_context_set(cs_resource_name)
-    out = pathlib.Path(output_file_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(ctx.model_dump_json(exclude_none=True, indent=2))
-    return output_file_path
+    client = context_set_mcp_client.ContextSetMcpClient()
+    res = client.get_context_set(context_set)
+    return json.dumps(res)
+
+
+@mcp.tool
+def delete_context_set(context_set: str) -> str:
+    """Deletes a specific context set from Dataplex via OneMCP.
+
+    Returns an LRO operation name.
+
+    Args:
+        context_set: Canonical resource name (format:
+            projects/{project}/locations/{location}/contextSets/{context_set}).
+
+    Returns:
+        JSON string result containing the LRO operation resource name to poll with get_operation.
+    """
+    client = context_set_mcp_client.ContextSetMcpClient()
+    res = client.delete_context_set(context_set)
+    return json.dumps(res)
+
+
+@mcp.tool
+def list_context_set_locations(project_id: str) -> str:
+    """Lists supported GCP locations where context sets can live via OneMCP.
+
+    Args:
+        project_id: Google Cloud Project ID.
+
+    Returns:
+        JSON string listing valid locations (e.g. ["us-central1"]).
+    """
+    client = context_set_mcp_client.ContextSetMcpClient()
+    res = client.list_context_set_locations(project_id)
+    return json.dumps(res)
+
+
+@mcp.tool
+def get_operation(
+    project_id: str | None = None,
+    location: str | None = None,
+    operation_id: str | None = None,
+    operation_name: str | None = None,
+) -> str:
+    """Polls a Long-Running Operation (LRO) until done via OneMCP.
+
+    Args:
+        project_id: GCP project ID.
+        location: GCP location ID (e.g. us-central1).
+        operation_id: Operation ID string.
+        operation_name: Optional full operation name (projects/{project}/locations/{location}/operations/{operation_id}).
+
+    Returns:
+        Operation status JSON (containing 'done': bool, and result or error).
+    """
+    if operation_name and (not project_id or not location or not operation_id):
+        parts = operation_name.split("/")
+        if (
+            len(parts) >= 6
+            and parts[0] == "projects"
+            and parts[2] == "locations"
+            and parts[4] == "operations"
+        ):
+            project_id = parts[1]
+            location = parts[3]
+            operation_id = parts[5]
+
+    if not project_id or not location or not operation_id:
+        return json.dumps({
+            "error": "Missing required arguments: provide project_id, location, and operation_id (or a valid operation_name)"
+        })
+
+    client = context_set_mcp_client.ContextSetMcpClient()
+    res = client.get_operation(project_id, location, operation_id)
+    return json.dumps(res)
 
 
 @mcp.tool
