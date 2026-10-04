@@ -33,8 +33,8 @@ Score a ContextSet against a golden dataset by running Evalbench, and return a s
   ```
 
 - A ContextSet, supplied as **exactly one of**:
-  - **`cs_resource_name`** — a full Context Store resource name (e.g., `projects/<p>/locations/<l>/contextSetGroups/<g>/contextSets/<c>@<v>`). Used directly.
-  - **Local ContextSet JSON file** + the coordinates required by `upload_context_set` — the skill uploads it (with explicit user consent) to obtain a `cs_resource_name` for the run.
+  - **`cs_resource_name`** — a full Context Store resource name (e.g., `projects/<project_id>/locations/<location>/contextSets/<context_set_id>`). Used directly.
+  - **Local ContextSet JSON file** + `project_id`, `location`, and a `context_set_id` — the skill uploads it (with explicit user consent) to obtain a `cs_resource_name` for the run. See the Context Store (OneMCP) Protocol in `context-engineering-workflow`.
 
 - An `output_dir` (absolute or workspace-relative) where the eval configs and reports should live. If the user hasn't specified one, prompt them; a sensible suggestion is `./eval-runs/<name>/`.
 
@@ -52,10 +52,13 @@ Score a ContextSet against a golden dataset by running Evalbench, and return a s
 2. **Prepare the ContextSet resource name.**
    - If the user supplied a `cs_resource_name`, use it directly.
    - If the user supplied a local file:
-     - Confirm every field required by `upload_context_set` is present. Ask for any missing values individually — do not guess.
-     - Ask for explicit consent before uploading. Summarize the target resource in the prompt so the user knows what will be written.
-     - On consent, call `upload_context_set`. The returned resource name becomes `cs_resource_name` for the rest of this run.
-     - On `upload_context_set` failure, surface the error verbatim and stop. Do not fall back to a manual upload URL.
+     - Confirm `project_id`, `location`, and `context_set_id` are all present. Ask for any missing value individually — do not guess.
+     - Call `list_context_set_locations(project_id)` and confirm `location` is in the returned list; if not, let the user pick one from it.
+     - Build `context_set = projects/<project_id>/locations/<location>/contextSets/<context_set_id>` and ask for explicit consent before uploading. Show the exact resource name, and warn that if a context set with this name already exists the upload **overwrites it** irrecoverably.
+     - On consent, call `upload_context_set(context_set=<context_set>, local_file_path=<file>)`.
+     - Poll `get_operation` on the returned operation (1 s doubling backoff, 5-minute ceiling) until `done: true` before continuing — see the Context Store (OneMCP) Protocol. **Do not proceed to step 3 or call `generate_evalbench_configs` until `done: true` is observed**; evaluating before the upload has landed scores a missing or stale context set.
+     - On `done: true`, `<context_set>` becomes `cs_resource_name` for the rest of this run.
+     - On an `upload_context_set` failure or an operation that reports an `error`, surface it verbatim and stop. Do not fall back to a manual upload URL.
 
 3. **Select the DB source from `tools.yaml`.**
    - Find all `kind: source` blocks whose `type` is a supported evaluation engine (consult `generate_evalbench_configs` for the current list).
@@ -88,12 +91,15 @@ Score a ContextSet against a golden dataset by running Evalbench, and return a s
 - If both `cs_resource_name` and a local file are provided, ask the user which to use — do not silently pick.
 - On `generate_evalbench_configs` errors, surface the error and stop; do not retry blindly.
 - This skill is stateless. Every path comes from the caller — do not assume a workspace layout or write cross-phase state files.
-- Use the caller's Context Store coordinates (`project_id`, `csg_id`, `cs_id`, `version`) verbatim when supplied. If any are missing, ask the user explicitly — do not infer from filenames, paths, or `tools.yaml` without their confirmation.
+- Use the caller's Context Store coordinates (`project_id`, `location`, `context_set_id`) verbatim when supplied. If any are missing, ask the user explicitly — do not infer from filenames, paths, or `tools.yaml` without their confirmation.
+- Never evaluate a context set whose upload operation has not reported `done: true`.
 
 ## Tools
 
 **MCP:**
-- `upload_context_set` → `cs_resource_name` — used only when the caller supplies a local file instead of a resource name.
+- `list_context_set_locations` — confirm the upload location; used only when the caller supplies a local file.
+- `upload_context_set` — used only when the caller supplies a local file instead of a resource name; returns an operation.
+- `get_operation` — poll the upload operation until `done: true` before evaluating.
 - `generate_evalbench_configs` — produces Evalbench YAML configs on disk.
 - `read_evaluation_result` — parses `scores.csv` / `summary.csv` into a markdown summary.
 

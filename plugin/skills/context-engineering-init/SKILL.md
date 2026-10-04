@@ -65,13 +65,17 @@ Commands in parentheses are examples — the agent may use its own approach.
 - **ADC quota project set** — required by Context Store; the `X-Goog-User-Project` header is derived from it. Missing → 400 on upload/download. (Example: `gcloud auth application-default print-quota-project`; fix via `gcloud auth application-default set-quota-project <project>`.)
 
 ### GCP API enablement
-- **Dataplex API** (`dataplex.googleapis.com`) — required by Context Store operations (`upload_context_set`, `download_context_set`).
+- **Dataplex API** (`dataplex.googleapis.com`) — required by every Context Store tool (`list_context_set_locations`, `upload_context_set`, `get_context_set`, `delete_context_set`, `get_operation`). See the Context Store (OneMCP) Protocol in `context-engineering-workflow` for how these are used.
 - **Gemini Data Analytics API** (`geminidataanalytics.googleapis.com`) — required by QueryData (used inside `context-engineering-evaluate`).
 
 (Example: check enablement via `gcloud services list --enabled --project=<project>`; enable via `gcloud services enable <api> --project=<project>`.)
 
 ### GCP IAM (operational probes)
-- **Context Store access** — required by `upload_context_set` / `download_context_set` and by QueryData's context lookup. Probe by attempting a Dataplex Context Store read (e.g., list CSGs in `<project>`). On 403, surface the error verbatim and ask the user to request the appropriate Context Store role from their IAM admin.
+- **Context Store access** — required by every Context Store tool and by QueryData's context lookup. Probe by calling `get_context_set` on a well-formed resource name that is known not to exist, e.g. `projects/<project>/locations/us-central1/contextSets/preflight-probe-does-not-exist`. Interpret the outcome:
+  - **NOT_FOUND** (or INVALID_ARGUMENT) → the request was authenticated and authorized and reached the API; the probe **passes**. This is the expected result.
+  - **UNAUTHENTICATED** → ADC is missing or expired; point the user back to the GCP authentication checks above.
+  - **PERMISSION_DENIED** → surface the error verbatim and ask the user to request the appropriate Context Store role from their IAM admin.
+  - Anything else → surface the error verbatim; do not guess at the cause.
 - **GDA access** — required by QueryData (used by `evaluate`). Probe by attempting a lightweight QueryData call in `<project>`. On 403, same handling.
 
 ### Toolbox configuration
@@ -100,6 +104,8 @@ Commands in parentheses are examples — the agent may use its own approach.
 
 ## Gotchas
 - **Quota project vs ADC project:** ADC infers a default project from `gcloud config`, but Context Store requires an explicit quota project via `X-Goog-User-Project`. Missing quota project → 400 from Context Store API.
+- **Context Store uploads and deletes are asynchronous:** `upload_context_set` / `delete_context_set` return an operation, not a finished result. Downstream skills must poll `get_operation` until `done: true` (see the Context Store (OneMCP) Protocol in `context-engineering-workflow`). The preflight probe above uses `get_context_set`, which is synchronous, precisely so it needs no polling.
+- **Context Store endpoint is pinned in code:** the OneMCP endpoint the tools talk to is set in `context_set_mcp_client.py`, not in `tools.yaml`. A probe that fails with a connection or DNS error points at the endpoint, not at the user's configuration.
 - **MCP restart required for new tools.yaml sources:** Toolbox reads `tools.yaml` at MCP-server startup. Validation runs standalone, but agent visibility of new sources needs a restart.
 - **AlloyDB requires `cluster` + `instance`; Cloud SQL only `instance`.**
 - **Spanner uses ADC; verification fails without `gcloud auth application-default login`.**

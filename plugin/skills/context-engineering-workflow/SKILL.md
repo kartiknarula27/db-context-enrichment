@@ -59,6 +59,59 @@ Experienced users can skip this section and invoke any peer directly.
 
 ---
 
+## Context Store (OneMCP) Protocol
+
+All peer skills that touch the Context Store (`bootstrap`, `evaluate`, `hillclimb`, and the `init` preflight) follow these rules. They are stated once here; peers reference them and repeat only the poll gate inline at each call site.
+
+### Tools
+
+| Tool | Purpose | Returns |
+| :--- | :--- | :--- |
+| `list_context_set_locations(project_id)` | Discover which locations accept context sets. | List of location IDs. |
+| `upload_context_set(context_set, local_file_path \| context_payload, description?)` | Create **or overwrite** a context set from a local file or inline JSON. | A long-running operation (`name`). |
+| `get_context_set(context_set)` | Read a context set. | `{"payload": "<ContextSet JSON string>"}`. |
+| `delete_context_set(context_set)` | Delete a context set. | A long-running operation (`name`). |
+| `get_operation(operation_name)` (or `project_id` + `location` + `operation_id`) | Poll a long-running operation. | `{"done": bool, ...}` plus `error` on failure. |
+
+### Resource naming
+
+A context set is addressed as `projects/<project_id>/locations/<location>/contextSets/<context_set_id>`.
+
+*   `<context_set_id>` is user-chosen. Confirm it with the user before the first upload.
+*   Hill-climbing works on transient copies named `<context_set_id>_draft<N>` (`_draft0`, `_draft1`, …). These exist only between upload and the end of that iteration's evaluation; the loop deletes them itself. The final deliverable is uploaded under the bare `<context_set_id>`.
+
+### Location resolution
+
+Before the first upload in a run, call `list_context_set_locations(project_id)`. If the user named a location, confirm it is in the returned list; if not, let them pick from the list. Record the chosen location in the run's state. Do not assume a default location.
+
+### Long-running operations — the poll gate
+
+`upload_context_set` and `delete_context_set` are **asynchronous**: the tool returns as soon as the request is accepted, not when the work is done. After either call:
+
+1.  Take `name` from the response.
+2.  Call `get_operation(operation_name=<name>)`.
+3.  If `done` is not `true`, wait and call again. Start with a 1 s wait and double it each time (1 s, 2 s, 4 s, 8 s, …). Stop after 5 minutes total.
+4.  Log every poll response so the user can see progress.
+5.  **`done: true` means the operation is complete.** Continue with the next step. No additional verification call is needed.
+6.  `done: true` together with an `error` field means the operation failed. Surface the error verbatim and stop.
+7.  If the 5-minute ceiling is reached, surface the operation name and stop.
+
+**Never act on a context set whose upload operation has not yet reported `done: true`.** In particular, `evaluate` must not generate Evalbench configs or launch an evaluation until the upload it depends on is done; otherwise the evaluation runs against a missing or stale context set and its score is meaningless.
+
+### Reading a context set to disk
+
+`get_context_set` returns the ContextSet as a JSON string in `payload`. Parse it and write it to the target path with ordinary file tooling; the tool does not write files.
+
+### Overwrite hazard
+
+`upload_context_set` is an upsert: uploading to a `<context_set_id>` that already exists **silently replaces its contents**, and the previous contents cannot be recovered from the store. Before any upload to a bare (non-`_draft`) name — especially the final upload at the end of a hill-climb run — tell the user the exact resource name and ask them to confirm. If they are reusing a name from an earlier run or from another team, make sure that is intended.
+
+### Idempotent delete
+
+A `delete_context_set` that fails with NOT_FOUND is treated as success. This matters when resuming an interrupted hill-climb run, where a draft may already have been removed.
+
+---
+
 ## Workflow Phases, Rationales & Entry Prerequisites
 
 ---
