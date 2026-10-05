@@ -218,27 +218,44 @@ def generate_upload_url(
         return "Error: Invalid db_engine. Must be one of 'alloydb', 'cloudsql', 'spanner', or 'bigtable'."
 
 
-@mcp.tool
+@mcp.tool(
+    annotations={
+        "title": "Upload Context Set",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
 def upload_context_set(
     context_set: str,
     context_payload: str | None = None,
     local_file_path: str | None = None,
     description: str | None = None,
 ) -> str:
-    """Uploads a context set to Dataplex OneMCP.
+    """Uploads a context set. Creates it if it does not exist, otherwise overwrites it.
 
-    Accepts either a stringified JSON 'context_payload' directly or a
-    'local_file_path' to a ContextSet JSON file.
+    Call list_context_set_locations first to confirm the location is supported.
+
+    Upload is asynchronous: this tool returns a Long-Running Operation, not a
+    finished result. To complete the upload the agent MUST:
+      1. Capture the operation's 'name' from the response.
+      2. Poll get_operation with that name until the response has 'done': true.
+    Do not evaluate or otherwise use the context set until 'done': true is observed.
+
+    Supply the ContextSet body as exactly one of 'local_file_path' (preferred —
+    the file is read and sent without passing through the model) or
+    'context_payload' (inline JSON string).
 
     Args:
         context_set: Canonical resource name (format:
             projects/{project}/locations/{location}/contextSets/{context_set}).
-        context_payload: Optional stringified JSON payload content of the ContextSet.
-        local_file_path: Optional path to a local ContextSet JSON file.
-        description: Optional description of the context set.
+        context_payload: Inline ContextSet JSON string.
+        local_file_path: Path to a local ContextSet JSON file.
+        description: Optional human-readable description of the context set.
 
     Returns:
-        JSON string result from the OneMCP tool.
+        JSON string containing the Long-Running Operation (includes 'name').
     """
     if not context_payload and not local_file_path:
         raise ValueError(
@@ -255,72 +272,123 @@ def upload_context_set(
     return json.dumps(res)
 
 
-@mcp.tool
+@mcp.tool(
+    annotations={
+        "title": "Get Context Set",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
 def get_context_set(context_set: str) -> str:
-    """Gets a context set from Dataplex OneMCP.
+    """Gets a context set. Synchronous; no polling required.
 
     Args:
         context_set: Canonical resource name (format:
             projects/{project}/locations/{location}/contextSets/{context_set}).
 
     Returns:
-        JSON string result from the OneMCP tool containing the context payload.
+        JSON string of the form {"payload": "<ContextSet JSON string>"}. Parse
+        'payload' to obtain the ContextSet. A NOT_FOUND error means no context
+        set exists under that name.
     """
     client = context_set_mcp_client.ContextSetMcpClient()
     res = client.get_context_set(context_set)
     return json.dumps(res)
 
 
-@mcp.tool
+@mcp.tool(
+    annotations={
+        "title": "Delete Context Set",
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
 def delete_context_set(context_set: str) -> str:
-    """Deletes a specific context set from Dataplex via OneMCP.
+    """Deletes a specific context set. This cannot be undone.
 
-    Returns an LRO operation name.
+    Deletion is asynchronous: this tool returns a Long-Running Operation, not a
+    finished result. To complete the deletion the agent MUST:
+      1. Capture the operation's 'name' from the response.
+      2. Poll get_operation with that name until the response has 'done': true.
 
     Args:
         context_set: Canonical resource name (format:
             projects/{project}/locations/{location}/contextSets/{context_set}).
 
     Returns:
-        JSON string result containing the LRO operation resource name to poll with get_operation.
+        JSON string containing the Long-Running Operation (includes 'name').
     """
     client = context_set_mcp_client.ContextSetMcpClient()
     res = client.delete_context_set(context_set)
     return json.dumps(res)
 
 
-@mcp.tool
+@mcp.tool(
+    annotations={
+        "title": "List Context Set Locations",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
 def list_context_set_locations(project_id: str) -> str:
-    """Lists supported GCP locations where context sets can live via OneMCP.
+    """Lists locations where context sets can live.
+
+    upload_context_set will fail if the request specifies a location that is
+    not in this list. Synchronous; no polling required.
 
     Args:
-        project_id: Google Cloud Project ID.
+        project_id: Google Cloud project ID.
 
     Returns:
-        JSON string listing valid locations (e.g. ["us-central1"]).
+        JSON string listing supported location IDs (e.g. ["us-central1"]).
     """
     client = context_set_mcp_client.ContextSetMcpClient()
     res = client.list_context_set_locations(project_id)
     return json.dumps(res)
 
 
-@mcp.tool
+@mcp.tool(
+    annotations={
+        "title": "Get Operation",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
 def get_operation(
     project_id: str | None = None,
     location: str | None = None,
     operation_id: str | None = None,
     operation_name: str | None = None,
 ) -> str:
-    """Polls a Long-Running Operation (LRO) until done via OneMCP.
+    """Gets the current status of a Long-Running Operation returned by
+    upload_context_set or delete_context_set.
+
+    Call repeatedly until the response has 'done': true. Use a growing wait
+    between calls (1s, 2s, 4s, 8s, ...) and give up after about 5 minutes.
+    If 'done' is true and an 'error' field is present, the operation failed.
+
+    Identify the operation either by its full 'operation_name' (as returned
+    in the 'name' field of upload/delete) or by project_id + location +
+    operation_id.
 
     Args:
-        project_id: GCP project ID.
-        location: GCP location ID (e.g. us-central1).
-        operation_id: Operation ID string.
-        operation_name: Optional full operation name (projects/{project}/locations/{location}/operations/{operation_id}).
+        project_id: Google Cloud project ID.
+        location: Location ID (e.g. us-central1).
+        operation_id: Operation ID, the last path segment of the operation name.
+        operation_name: Full operation name
+            (projects/{project}/locations/{location}/operations/{operation_id}).
 
     Returns:
-        Operation status JSON (containing 'done': bool, and result or error).
+        JSON string with the operation status, including 'done' and, when
+        finished, either a result or an 'error'.
     """
     if operation_name and (not project_id or not location or not operation_id):
         parts = operation_name.split("/")
