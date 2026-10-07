@@ -41,12 +41,12 @@ Score a ContextSet against a golden dataset by running Evalbench, and return a s
 ## Guidance
 
 1. **Collect inputs.** Prompt only for what's missing from the Prerequisites. Trust `tools.yaml` values as-is — don't ask the user to re-verify them.
-   - **Dataset Selection & Dev/Test Split Check**:
-     - Check for available dataset files in the workspace (or `<output_dir>/splits/`): `splits/dev.json`, `splits/test.json`, or the full golden dataset.
-     - **If `splits/dev.json` exists**: Default to evaluating on `splits/dev.json` (or prompt the user if they specifically want to score `test.json` or the full dataset).
+   - **Dataset Selection & Hillclimb/Holdout Split Check**:
+     - Check for available dataset files in the workspace (or `<output_dir>/splits/`): `splits/hillclimb.json`, `splits/holdout.json`, or the full golden dataset.
+     - **If `splits/hillclimb.json` exists**: Default to evaluating on `splits/hillclimb.json`. `splits/holdout.json` is reserved for the Holdout Evaluation phase in `context-engineering-workflow`; evaluate it only when that phase (or the user, explicitly) asks for it.
      - **If `splits/` does NOT exist yet**: Ask the user:
-       > *"Would you like to set up a Dev/Test split now (via the `split_dataset` tool to prepare for generalizability testing during hill-climbing), or run a baseline evaluation against all questions?"*
-       - If they choose Dev/Test split: Invoke the `split_dataset` MCP tool with `golden_dataset_path` and `output_dir` to generate `splits/dev.json` and `splits/test.json`, then evaluate on `splits/dev.json`.
+       > *"Would you like to set up a Hillclimb/Holdout split now (via the `split_dataset` tool to prepare for generalizability testing during hill-climbing), or run a baseline evaluation against all questions?"*
+       - If they choose the split: Invoke the `split_dataset` MCP tool with `golden_dataset_path` and `output_dir` to generate `splits/hillclimb.json` and `splits/holdout.json`, then evaluate on `splits/hillclimb.json`.
        - If they choose full evaluation: Evaluate directly against the provided golden dataset.
 
 2. **Prepare the ContextSet resource name.**
@@ -86,7 +86,7 @@ Score a ContextSet against a golden dataset by running Evalbench, and return a s
 
 ## Rules
 
-- Never upload a ContextSet without explicit user consent.
+- Never upload a ContextSet without explicit user consent — unless the caller is `context-engineering-hillclimb` and the experiment `state.md` records `Auto-approve uploads: true`, in which case that one-time consent covers the `_draft` uploads.
 - Never invoke bootstrap or hillclimb from within this skill.
 - If both `cs_resource_name` and a local file are provided, ask the user which to use — do not silently pick.
 - On `generate_evalbench_configs` errors, surface the error and stop; do not retry blindly.
@@ -104,7 +104,7 @@ Score a ContextSet against a golden dataset by running Evalbench, and return a s
 - `read_evaluation_result` — parses `scores.csv` / `summary.csv` into a markdown summary.
 
 **Shell:**
-- `uvx google-evalbench@1.10.0 --experiment_config=<path>` — runs the eval job against the published release.
+- `uvx google-evalbench@1.17.0 --experiment_config=<path>` — runs the eval job against the published release.
 
 **References:**
 - `references/<db_type>.md` (`alloydb-postgres.md`, `cloud-sql-mysql.md`, `cloud-sql-postgres.md`, `spanner.md`) — per-engine schema examples for fixing `tools.yaml` source blocks if `generate_evalbench_configs` reports a validation failure.

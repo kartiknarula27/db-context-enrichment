@@ -39,7 +39,10 @@ def generate_evalbench_configs(
     `run_config.yaml` also points evalbench at `<output_dir>/eval_reports/`
     for its results.
     """
-    params = _extract_toolbox_params(toolbox_config_path, toolbox_source_name)
+    state_md_path = _find_experiment_state_md(output_dir)
+    params = _extract_toolbox_params(
+        toolbox_config_path, toolbox_source_name, state_md_path
+    )
     generator = _get_db_generator(params)
 
     db_config_yaml = generator.generate_db_config()
@@ -71,9 +74,15 @@ def generate_evalbench_configs(
 
 
 def _extract_toolbox_params(
-    toolbox_config_path: str, toolbox_source_name: str
+    toolbox_config_path: str,
+    toolbox_source_name: str,
+    state_md_path: str | None = None,
 ) -> dict[str, Any]:
-    """Deterministically extracts connection parameters for a specific database source from tools.yaml."""
+    """Deterministically extracts connection parameters for a specific database source from tools.yaml.
+
+    For Spanner sources, `state_md_path` (the experiment's `state.md`) is read for
+    the `**Graph Ids**` bullet. If it is None or missing, no graph_ids are set.
+    """
     try:
         with open(toolbox_config_path) as f:
             content = f.read()
@@ -98,12 +107,11 @@ def _extract_toolbox_params(
                     f"Could not find a 'kind: source' named '{toolbox_source_name}' in {toolbox_config_path}"
                 )
 
-            # For Spanner sources, state.md is the authoritative single source of truth for graph_ids
-            # (QueryData API requires explicit graph_ids in model_config.yaml, whereas tools.yaml
-            # only configures MCP Toolbox runtime tools and parameters).
-            if source_doc.get("type") == "spanner":
-                state_md_dir = os.path.dirname(toolbox_config_path)
-                state_md_path = os.path.join(state_md_dir, "state.md")
+            # For Spanner sources, the experiment's state.md is the authoritative single
+            # source of truth for graph_ids (QueryData API requires explicit graph_ids in
+            # model_config.yaml, whereas tools.yaml only configures MCP Toolbox runtime
+            # tools and parameters).
+            if source_doc.get("type") == "spanner" and state_md_path:
                 if graph_ids := _parse_graph_ids_from_state_md(state_md_path):
                     source_doc["graph_ids"] = graph_ids
 
@@ -117,6 +125,35 @@ def _extract_toolbox_params(
         )
     except yaml.YAMLError as e:
         raise ValueError(f"Failed to parse {toolbox_config_path} as YAML: {e}")
+
+
+# How many parent directories above `output_dir` to search for the experiment's
+# state.md. Eval output always lives inside the experiment workspace
+# (`.context-engineering/experiments/<name>/`): hill-climb iterations write to
+# `<root>/vN/eval/` (2 levels down) and the holdout pass to `<root>/holdout_eval/`
+# (1 level down). One extra level is allowed as slack.
+_STATE_MD_MAX_PARENT_LEVELS = 3
+
+
+def _find_experiment_state_md(output_dir: str) -> str | None:
+    """Locates the experiment `state.md` by walking up from `output_dir`.
+
+    `tools.yaml` is shared at `.context-engineering/` while `state.md` is
+    per-experiment at `.context-engineering/experiments/<name>/state.md`, so the
+    two are not co-located; `output_dir` is the only input that is guaranteed to
+    sit inside the experiment workspace. Returns the first `state.md` found in
+    `output_dir` or up to `_STATE_MD_MAX_PARENT_LEVELS` of its parents, else None.
+    """
+    current = os.path.abspath(output_dir)
+    for _ in range(_STATE_MD_MAX_PARENT_LEVELS + 1):
+        candidate = os.path.join(current, "state.md")
+        if os.path.isfile(candidate):
+            return candidate
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    return None
 
 
 def _parse_graph_ids_from_state_md(state_md_path: str) -> list[str] | None:

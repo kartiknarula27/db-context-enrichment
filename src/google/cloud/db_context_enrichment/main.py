@@ -167,57 +167,6 @@ def generate_evalbench_configs(
     return f"Successfully generated all configs for evaluation in {output_dir}/eval_configs/"
 
 
-@mcp.tool
-def generate_upload_url(
-    db_engine: str,
-    project_id: str,
-    location: str | None = None,
-    cluster_id: str | None = None,
-    instance_id: str | None = None,
-    database_id: str | None = None,
-) -> str:
-    """
-    Generates a URL for uploading the template file based on the database engine.
-
-    Args:
-        db_engine: The database engine. Accepted values are 'alloydb',
-                 'cloudsql', 'spanner', or 'bigtable'. This can be derived from
-                 the 'kind' field in the tools.yaml file. For example,
-                 'alloydb-postgres' becomes 'alloydb', 'cloud-sql-postgres'
-                 becomes 'cloudsql', and 'bigtable' becomes 'bigtable'.
-        project_id: The Google Cloud project ID.
-        location: The location of the AlloyDB cluster.
-        cluster_id: The ID of the AlloyDB cluster.
-        instance_id: The ID of the Cloud SQL, Spanner, or Bigtable instance.
-        database_id: The ID of the Spanner database.
-
-    Returns:
-        The generated URL as a string, or an error message if the source kind is invalid.
-    """
-    if db_engine == "alloydb":
-        if location and cluster_id and project_id:
-            return f"https://console.cloud.google.com/alloydb/locations/{location}/clusters/{cluster_id}/studio?project={project_id}"
-        else:
-            return "Error: Missing location, cluster_id, or project_id for alloydb."
-    elif db_engine == "cloudsql":
-        if instance_id and project_id:
-            return f"https://console.cloud.google.com/sql/instances/{instance_id}/studio?project={project_id}"
-        else:
-            return "Error: Missing instance_id or project_id for cloudsql."
-    elif db_engine == "spanner":
-        if instance_id and database_id and project_id:
-            return f"https://console.cloud.google.com/spanner/instances/{instance_id}/databases/{database_id}/details/query?project={project_id}"
-        else:
-            return "Error: Missing instance_id, database_id, or project_id for spanner."
-    elif db_engine == "bigtable":
-        if instance_id and project_id:
-            return f"https://console.cloud.google.com/bigtable/instances/{instance_id}/overview?project={project_id}"
-        else:
-            return "Error: Missing instance_id or project_id for bigtable."
-    else:
-        return "Error: Invalid db_engine. Must be one of 'alloydb', 'cloudsql', 'spanner', or 'bigtable'."
-
-
 @mcp.tool(
     annotations={
         "title": "Upload Context Set",
@@ -233,9 +182,19 @@ def upload_context_set(
     local_file_path: str | None = None,
     description: str | None = None,
 ) -> str:
-    """Uploads a context set. Creates it if it does not exist, otherwise overwrites it.
+    """Uploads a context set. Creates it if it does not exist, otherwise OVERWRITES it in place.
 
-    Call list_context_set_locations first to confirm the location is supported.
+    There is no versioning: the previous contents of an existing context set are
+    replaced and cannot be recovered from the store. Before the first upload in
+    a session, confirm the project, location and context set id with the user
+    (the init skill records them under '## Metadata' in the experiment
+    state.md at .context-engineering/experiments/<experiment_name>/state.md,
+    and resolves the location via list_context_set_locations once).
+
+    Hill-climbing convention: iterate on the working copy
+    '<context_set_id>_draft' and upload to the bare '<context_set_id>' only
+    when publishing the best version. Never upload intermediate iterations to
+    the bare id.
 
     Upload is asynchronous: this tool returns a Long-Running Operation, not a
     finished result. To complete the upload the agent MUST:
@@ -309,6 +268,13 @@ def get_context_set(context_set: str) -> str:
 )
 def delete_context_set(context_set: str) -> str:
     """Deletes a specific context set. This cannot be undone.
+
+    Use only for: (a) removing the '<context_set_id>_draft' working copy after
+    the best version has been published to the bare '<context_set_id>', or
+    (b) an explicit user request to clean up a named context set. Never call
+    this inside the hill-climbing loop — iterations overwrite the working copy
+    via upload_context_set instead. A NOT_FOUND error means the context set is
+    already gone and should be treated as success.
 
     Deletion is asynchronous: this tool returns a Long-Running Operation, not a
     finished result. To complete the deletion the agent MUST:

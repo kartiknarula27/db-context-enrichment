@@ -486,8 +486,18 @@ def test_parse_graph_ids_from_state_md(tmp_path):
     assert _parse_graph_ids_from_state_md(str(tmp_path / "nonexistent.md")) is None
 
 
-def test_generate_evalbench_configs_spanner_graph_from_state_md(tmp_path):
-    tools_yaml = tmp_path / "tools.yaml"
+def _write_spanner_workspace(tmp_path, experiment="exp1", graph_ids_line=None):
+    """Lays out the real workspace shape:
+
+        .context-engineering/tools.yaml                      (shared)
+        .context-engineering/experiments/<exp>/state.md      (per experiment)
+        .context-engineering/experiments/<exp>/dataset.json
+    """
+    ce_dir = tmp_path / ".context-engineering"
+    exp_dir = ce_dir / "experiments" / experiment
+    exp_dir.mkdir(parents=True)
+
+    tools_yaml = ce_dir / "tools.yaml"
     tools_yaml.write_text(
         textwrap.dedent("""\
             kind: source
@@ -499,26 +509,49 @@ def test_generate_evalbench_configs_spanner_graph_from_state_md(tmp_path):
         """)
     )
 
-    state_md = tmp_path / "state.md"
-    state_md.write_text(
-        textwrap.dedent("""\
-            # Context Authoring Experiment State Tracking
+    if graph_ids_line is not None:
+        (exp_dir / "state.md").write_text(
+            textwrap.dedent(f"""\
+                # Hill-Climbing Experiment: {experiment}
 
-            ## Active Database
-            - **Source Name**: spanner-source
-            - **Type**: spanner
-            - **Graph Ids**: ["ResearchGraph", "LogisticsNet"]
-        """)
-    )
+                ## Active Database
+                - **Source Name**: spanner-source
+                - **Type**: spanner
+                {graph_ids_line}
+            """)
+        )
 
-    dataset_json = tmp_path / "dataset.json"
+    dataset_json = exp_dir / "dataset.json"
     dataset_json.write_text(
         json.dumps(
             [{"id": "1", "database": "test-db", "nlq": "q", "golden_sql": "SELECT 1"}]
         )
     )
+    return tools_yaml, exp_dir, dataset_json
 
-    out_dir = tmp_path / "experiments" / "exp1"
+
+def _spanner_db_reference(out_dir):
+    model_config_path = out_dir / "eval_configs" / "model_config.yaml"
+    assert model_config_path.exists()
+    model_config = yaml.safe_load(model_config_path.read_text())
+    assert model_config["use_rest_api"] is True
+    return model_config["context"]["datasource_references"]["spanner_reference"][
+        "database_reference"
+    ]
+
+
+@pytest.mark.parametrize(
+    "output_subdir",
+    ["v1/eval", "holdout_eval"],
+    ids=["hillclimb-iteration", "holdout"],
+)
+def test_generate_evalbench_configs_spanner_graph_from_experiment_state_md(
+    tmp_path, output_subdir
+):
+    tools_yaml, exp_dir, dataset_json = _write_spanner_workspace(
+        tmp_path, graph_ids_line='- **Graph Ids**: ["ResearchGraph", "LogisticsNet"]'
+    )
+    out_dir = exp_dir / output_subdir
 
     generate_evalbench_configs(
         output_dir=str(out_dir),
@@ -528,38 +561,17 @@ def test_generate_evalbench_configs_spanner_graph_from_state_md(tmp_path):
         toolbox_source_name="spanner-source",
     )
 
-    model_config_path = out_dir / "eval_configs" / "model_config.yaml"
-    assert model_config_path.exists()
-    model_config = yaml.safe_load(model_config_path.read_text())
-    assert model_config["use_rest_api"] is True
-    spanner_ref = model_config["context"]["datasource_references"]["spanner_reference"]
-    assert spanner_ref["database_reference"]["graph_ids"] == [
+    assert _spanner_db_reference(out_dir)["graph_ids"] == [
         "ResearchGraph",
         "LogisticsNet",
     ]
 
 
 def test_generate_evalbench_configs_spanner_no_state_md_graphs(tmp_path):
-    tools_yaml = tmp_path / "tools.yaml"
-    tools_yaml.write_text(
-        textwrap.dedent("""\
-            kind: source
-            name: spanner-source
-            type: spanner
-            project: test-project
-            instance: test-instance
-            database: test-db
-        """)
+    tools_yaml, exp_dir, dataset_json = _write_spanner_workspace(
+        tmp_path, graph_ids_line="- **Graph Ids**: []"
     )
-
-    dataset_json = tmp_path / "dataset.json"
-    dataset_json.write_text(
-        json.dumps(
-            [{"id": "1", "database": "test-db", "nlq": "q", "golden_sql": "SELECT 1"}]
-        )
-    )
-
-    out_dir = tmp_path / "experiments" / "exp2"
+    out_dir = exp_dir / "v1" / "eval"
 
     generate_evalbench_configs(
         output_dir=str(out_dir),
@@ -569,11 +581,56 @@ def test_generate_evalbench_configs_spanner_no_state_md_graphs(tmp_path):
         toolbox_source_name="spanner-source",
     )
 
-    model_config_path = out_dir / "eval_configs" / "model_config.yaml"
-    assert model_config_path.exists()
-    model_config = yaml.safe_load(model_config_path.read_text())
-    spanner_ref = model_config["context"]["datasource_references"]["spanner_reference"]
-    assert "graph_ids" not in spanner_ref["database_reference"]
+    assert "graph_ids" not in _spanner_db_reference(out_dir)
+
+
+def test_generate_evalbench_configs_spanner_ignores_state_md_next_to_tools_yaml(
+    tmp_path,
+):
+    """A stray state.md beside the shared tools.yaml must not leak graph ids into
+    an experiment that has none of its own."""
+    tools_yaml, exp_dir, dataset_json = _write_spanner_workspace(
+        tmp_path, graph_ids_line=None
+    )
+    (tools_yaml.parent / "state.md").write_text(
+        '## Active Database\n- **Graph Ids**: ["StaleGraph"]\n'
+    )
+    out_dir = exp_dir / "v1" / "eval"
+
+    generate_evalbench_configs(
+        output_dir=str(out_dir),
+        dataset_path=str(dataset_json),
+        context_set_id="projects/test-project/locations/us-central1/contextSets/context-123",
+        toolbox_config_path=str(tools_yaml),
+        toolbox_source_name="spanner-source",
+    )
+
+    assert "graph_ids" not in _spanner_db_reference(out_dir)
+
+
+def test_find_experiment_state_md_walks_up_bounded(tmp_path):
+    from google.cloud.db_context_enrichment.evaluate.evaluate_generator import (
+        _STATE_MD_MAX_PARENT_LEVELS,
+        _find_experiment_state_md,
+    )
+
+    root = tmp_path / "exp"
+    root.mkdir()
+    state_md = root / "state.md"
+    state_md.write_text("# state\n")
+
+    # output_dir itself, and each allowed parent level, resolve to the root state.md.
+    assert _find_experiment_state_md(str(root)) == str(state_md)
+    nested = root
+    for _ in range(_STATE_MD_MAX_PARENT_LEVELS):
+        nested = nested / "d"
+    assert _find_experiment_state_md(str(nested)) == str(state_md)
+
+    # One level too deep is out of range.
+    assert _find_experiment_state_md(str(nested / "too-deep")) is None
+
+    # No state.md anywhere above → None (and no crash walking to filesystem root).
+    assert _find_experiment_state_md(str(tmp_path / "elsewhere")) is None
 
 
 def test_generate_evalbench_configs_spanner_postgres():

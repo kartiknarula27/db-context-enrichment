@@ -16,6 +16,8 @@ From a target database and optional user-supplied enrichment sources (design doc
 - (Optional) Design docs, application code, sample SQL, glossary, or other enrichment sources.
 - (Optional, for upload) The target Context Store resource: `project_id`, `location`, and a `context_set_id`. Together they form `projects/<project_id>/locations/<location>/contextSets/<context_set_id>` — see the Context Store (OneMCP) Protocol in `context-engineering-workflow`.
 
+**When invoked by `context-engineering-hillclimb` inside an experiment** (`.context-engineering/experiments/<experiment_name>/state.md` exists): read the Toolbox source from `## Active Database` and `Enrichment sources` from `## Metadata`, write the output to `<workspace_root>/v0/context_set_v0.json`, skip steps 1–2 below unless a value is missing from `state.md`, and **do not upload** — the hill-climb loop owns all uploads.
+
 ## Guidance
 
 1. **Confirm scope with the user:**
@@ -27,7 +29,7 @@ From a target database and optional user-supplied enrichment sources (design doc
 2. **Collect enrichment sources:** prompt for design docs, ORM models, sample SQL, glossary, etc. Wait for the user's response before proceeding.
 
 3. **Deduce Key Info (Core Execution):**
-   - **Targeted Schema & Graph Retrieval**: Informed by the ingested application artifacts and design docs, use the available Toolbox MCP tools configured in the active `autoctx/tools.yaml` (e.g., `<source>-list-schemas`, `<source>-list-graphs`) to fetch the schemas for the target database and relevant tables/graphs.
+   - **Targeted Schema & Graph Retrieval**: Informed by the ingested application artifacts and design docs, use the available Toolbox MCP tools configured in the active `.context-engineering/tools.yaml` (e.g., `<source>-list-schemas`, `<source>-list-graphs`) to fetch the schemas for the target database and relevant tables/graphs.
    - Present the retrieved schema summary **structurally and cleanly** to the user. Ask the user if they want to filter or focus on specific schemas, tables, or graphs.
    - Perform a **deep analysis** of the retrieved **schema and any provided documentation or code** to identify important concepts, relationships, and likely query patterns.
    - **GQL Preference for Graph Entities**: When querying entities or relationships that are modeled within a property graph, **always prefer GQL (`GRAPH <graph_name> MATCH ...`)** over writing relational SQL `JOIN` queries against the underlying node/edge tables.

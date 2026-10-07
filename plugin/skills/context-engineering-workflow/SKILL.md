@@ -40,7 +40,11 @@ context-engineering-bootstrap]
     BaseCheck -- Yes --> Optimize[Autonomous Optimization
 context-engineering-hillclimb
 _runs evaluate on hillclimb split + analyze + mutate internally_]
-    Optimize --> End([End - Context Deployed])
+    Optimize --> Publish[Publish best iteration
+to bare context_set_id]
+    Publish --> Holdout[Holdout Evaluation &
+Generalizability Report]
+    Holdout --> End([End - Context Deployed])
 ```
 
 ---
@@ -49,7 +53,7 @@ _runs evaluate on hillclimb split + analyze + mutate internally_]
 
 If you're new, invoke the peer that matches your current state:
 
-*   No `.context-engineering/tools.yaml` → [context-engineering-init](../context-engineering-init/SKILL.md)
+*   No `.context-engineering/tools.yaml`, or no `state.md` for the experiment at `.context-engineering/experiments/<experiment_name>/` → [context-engineering-init](../context-engineering-init/SKILL.md)
 *   No golden dataset → [context-engineering-dataset-generation](../context-engineering-dataset-generation/SKILL.md)
 *   No base ContextSet → [context-engineering-bootstrap](../context-engineering-bootstrap/SKILL.md)
 *   Have a base ContextSet and want autonomous improvement → [context-engineering-hillclimb](../context-engineering-hillclimb/SKILL.md)
@@ -77,12 +81,12 @@ All peer skills that touch the Context Store (`bootstrap`, `evaluate`, `hillclim
 
 A context set is addressed as `projects/<project_id>/locations/<location>/contextSets/<context_set_id>`.
 
-*   `<context_set_id>` is user-chosen. Confirm it with the user before the first upload.
-*   Hill-climbing works on transient copies named `<context_set_id>_draft<N>` (`_draft0`, `_draft1`, …). These exist only between upload and the end of that iteration's evaluation; the loop deletes them itself. The final deliverable is uploaded under the bare `<context_set_id>`.
+*   `<context_set_id>` is user-chosen. `context-engineering-init` asks for it once (default: the experiment name) and records it in `state.md`; peers read it from there.
+*   Hill-climbing works on a **single** transient working copy named `<context_set_id>_draft`. Every iteration overwrites it; it is deleted once, after the final publish. The final deliverable is uploaded under the bare `<context_set_id>`.
 
 ### Location resolution
 
-Before the first upload in a run, call `list_context_set_locations(project_id)`. If the user named a location, confirm it is in the returned list; if not, let them pick from the list. Record the chosen location in the run's state. Do not assume a default location.
+Location is resolved **once**, by `context-engineering-init`: it calls `list_context_set_locations(project_id)`, lets the user pick (or confirms a named location is in the list), and records the choice in the experiment `state.md`. Peers read `Location` from `state.md` and do not call `list_context_set_locations` again. Do not assume a default location.
 
 ### Long-running operations — the poll gate
 
@@ -104,7 +108,7 @@ Before the first upload in a run, call `list_context_set_locations(project_id)`.
 
 ### Overwrite hazard
 
-`upload_context_set` is an upsert: uploading to a `<context_set_id>` that already exists **silently replaces its contents**, and the previous contents cannot be recovered from the store. Before any upload to a bare (non-`_draft`) name — especially the final upload at the end of a hill-climb run — tell the user the exact resource name and ask them to confirm. If they are reusing a name from an earlier run or from another team, make sure that is intended.
+`upload_context_set` is an upsert: uploading to a `<context_set_id>` that already exists **silently replaces its contents**, and the previous contents cannot be recovered from the store. This hazard is handled **once, in `context-engineering-init`**: it probes the bare `<context_set_id>` with `get_context_set`, and if it already exists, tells the user the exact resource name and asks for an explicit acknowledgement before recording `Overwrite acknowledged: yes` in `state.md`. The hill-climb publish reads that line and does not ask again. If a peer finds the line missing or `no`, it routes back to init instead of uploading to the bare name.
 
 ### Idempotent delete
 
@@ -118,23 +122,27 @@ A `delete_context_set` that fails with NOT_FOUND is treated as success. This mat
 
 ### Setup & Connection Configuration
 *   **Reference**: [context-engineering-init](../context-engineering-init/SKILL.md)
-*   **Goal**: Configure `.context-engineering/tools.yaml` for the Toolbox MCP server and verify runtime + GCP setup (uv, evalbench, ADC, Dataplex/GDA APIs, IAM).
+*   **Goal**: Configure `.context-engineering/tools.yaml` for the Toolbox MCP server, verify runtime + GCP setup (uv, evalbench, ADC, Dataplex/GDA APIs, IAM), and write the experiment `state.md` at `.context-engineering/experiments/<experiment_name>/state.md`. Its `## Metadata` records the Context Store coordinates (`Project`, `Location`, `Context set id`, `Final resource`, `Draft resource`, optional `Seed resource`), `Overwrite acknowledged`, `Auto-approve uploads`, the loop parameters (`Tuning target`, `Plateau k`, `Max iterations`), and enrichment sources; its `## Active Database` records the Toolbox source name, type and (for Spanner Graph) `Graph Ids`. Downstream peers read these values instead of re-asking.
 
 ---
 
 ### Master Loop Control & Tuning Target Gate (`Loop{Tuning Target Met?}`)
 As the master orchestrator, this skill strictly governs phase transitions after every evaluation run (`Run Evaluation And Score`). This gate **supersedes** the `## Final Summary & Next Steps` ("Conclude by providing a succinct summary... suggest actionable next steps") section in `context-engineering-evaluate/SKILL.md`:
 
-*   **Tuning Target Definition**:
-    *   The default tuning target is **100% accuracy (`0` failed queries)** on `splits/hillclimb.json`, unless the user specifies a custom target accuracy threshold (e.g., 90%) or maximum iteration limit recorded in `autoctx/state.md`.
+*   **Stopping Conditions** (all recorded in `.context-engineering/experiments/<experiment_name>/state.md` by init; checked in this order after every evaluation):
+    *   **Tuning target** — default **100% accuracy (`0` failed queries)** on `splits/hillclimb.json`, unless the user set a custom `Tuning target` (e.g., `0.9`).
+    *   **Plateau** — the last `Plateau k` iterations (default `3`) all failed to beat the best score so far.
+    *   **Iteration cap** — `Max iterations` (default `10`) iterations have been evaluated.
 *   **Mandatory Post-Evaluation Check (Immediate Autonomous Branching)**:
     *   Immediately upon completing any `Run Evaluation And Score` pass on `splits/hillclimb.json`, inspect the evaluation pass rate (`passed / total`) and failed query count:
-        1.  **When Tuning Target IS Hit (`pass_rate >= tuning_target` or `failed == 0`) or Loop Converged**:
+        1.  **When any Stopping Condition fires** (`pass_rate >= tuning_target`, plateau, or iteration cap):
             *   **HALT Hill-Climbing Immediately**: Do **not** enter `Optimization & Hill-Climbing Phase` and do **not** suggest another refinement loop.
-            *   **Zero-Confirmation / No-Yield Rule (Strictly Enforced)**: Do **NOT** conclude or yield your turn after scoring `splits/hillclimb.json`, and do **NOT** ask the user for permission, confirmation, or approval to proceed to the generalizability test.
-            *   **Immediately Execute Generalizability Test in the Same Turn**: Without waiting for user input, immediately continue calling tools in the exact same conversational turn to execute the **Holdout Evaluation & Generalization Reporting Phase** (`generate_evalbench_configs` on `splits/holdout.json` $\rightarrow$ `uvx google-evalbench@1.17.0` $\rightarrow$ `evaluate_generalizability` $\rightarrow$ display the novice-friendly On-Screen Card in chat $\rightarrow$ write `final_evaluation_report.md`).
-        2.  **When Tuning Target is NOT YET Hit (`pass_rate < tuning_target` and `failed > 0`)**:
+            *   **Publish**: upload the best-scoring iteration's local file under the bare `<context_set_id>` (poll gate), then delete `<context_set_id>_draft` (poll gate; NOT_FOUND is success). No confirmation is asked — the overwrite was acknowledged in init. Record `## Final:` in `state.md`.
+            *   **Zero-Confirmation / No-Yield Rule (Strictly Enforced)**: Do **NOT** conclude or yield your turn after scoring `splits/hillclimb.json` or after publishing, and do **NOT** ask the user for permission, confirmation, or approval to proceed to the generalizability test.
+            *   **Immediately Execute Generalizability Test in the Same Turn**: Without waiting for user input, immediately continue calling tools in the exact same conversational turn to execute the **Holdout Evaluation & Generalization Reporting Phase** against the published bare `<context_set_id>` (`generate_evalbench_configs` on `splits/holdout.json` $\rightarrow$ `uvx google-evalbench@1.17.0` $\rightarrow$ `evaluate_generalizability` $\rightarrow$ display the novice-friendly On-Screen Card in chat $\rightarrow$ write `final_evaluation_report.md`).
+        2.  **When no Stopping Condition fires (`pass_rate < tuning_target` and `failed > 0`)**:
             *   Proceed to `Optimization & Hill-Climbing Phase` (`context-engineering-hillclimb`) to perform Gap Analysis and Context Mutation on the failed queries, then re-evaluate.
+        3.  **When the user explicitly asks to stop**: finish the current iteration cleanly, append `## User Stop` to `state.md`, and **do not publish and do not run the holdout test**. A later resume offers the choice to continue or publish.
 
 ---
 
@@ -148,10 +156,10 @@ As the master orchestrator, this skill strictly governs phase transitions after 
     *   **Template-Preserving Expansion**: When expanding seed or user-supplied queries to reach the target dataset size (e.g., 150 items: 105 hillclimbing / 45 holdout), ensure sufficient variations preserve the normalized `golden_sql` template (using Paraphrasing, Distraction Injection, Linguistic Variation, or Value Substitution). If `split_dataset` fails because too many templates have only a single variation, expand existing SQL templates with template-preserving phrasing/parameter variations and re-run `split_dataset`—never bypass `split_dataset`.
 *   **Dataset Proposal & Input Scenarios**:
     *   **Proposal in Chat**: Crema proposes creating a dataset with 150 questions across 30 query patterns (105 hillclimbing questions for optimization, 45 holdout variations to test generalizability, default split ratio 0.7 and minimum holdout size 45). Internal partitions are preserved in `splits/hillclimb.json` and `splits/holdout.json` without exposing a separate `split_report.md` to the user.
-    *   **Scenario (a) Full Automated Flow**: User accepts proposal $\rightarrow$ generate, expand NLQ variations, run `split_dataset` to produce stratified hillclimb/holdout splits, hill-climb on hillclimb split, holdout evaluation, and generalizability reporting.
-    *   **Scenario (b) Skip Holdout Split (User Override)**: User overrides to skip holdout generation $\rightarrow$ run hill-climbing on hillclimb split only, do NOT compute generalizability metric, and record `generalizability_test: SKIPPED` in `.context-engineering/state.md`.
-    *   **Scenario (c) User-Supplied Dataset (Auto-Split)**: User provides evaluation set $\rightarrow$ Crema auto-expands question phrasings (preserving normalized SQL templates) and runs `split_dataset` into 105 hillclimbing / 45 holdout ($N_{\text{test}} \ge 45$, default split ratio 0.7, every holdout SQL template included in hillclimb); never ask the user to pre-partition.
-    *   **Scenario (d) Pre-Partitioned Datasets (Fail Early)**: User attempts to supply separate `--dev-dataset` and `--test-dataset` $\rightarrow$ fail early with `[ERROR] InvalidDatasetConfiguration`.
+    *   **Scenario (a) Full Automated Flow**: User accepts proposal $\rightarrow$ generate, expand NLQ variations, run `split_dataset` to produce stratified hillclimb/holdout splits, hill-climb on hillclimb split, publish, holdout evaluation, and generalizability reporting.
+    *   **Scenario (b) User-Supplied Dataset (Auto-Split)**: User provides evaluation set $\rightarrow$ Crema auto-expands question phrasings (preserving normalized SQL templates) and runs `split_dataset` into 105 hillclimbing / 45 holdout ($N_{\text{test}} \ge 45$, default split ratio 0.7, every holdout SQL template included in hillclimb); never ask the user to pre-partition.
+    *   **Scenario (c) Pre-Partitioned Datasets (Fail Early)**: User attempts to supply separate `--dev-dataset` and `--test-dataset` $\rightarrow$ fail early with `[ERROR] InvalidDatasetConfiguration`.
+    *   The split is **not optional**: there is no "skip holdout" path. Every golden dataset is split into `splits/hillclimb.json` and `splits/holdout.json`, and every completed hill-climb run ends with a holdout evaluation.
 
 ---
 
@@ -179,36 +187,24 @@ As the master orchestrator, this skill strictly governs phase transitions after 
 
 ### Holdout Evaluation & Generalization Reporting Phase
 *   **Reference**: Self-contained phase specification below.
-*   **Automatic Entry Trigger**: Triggered **immediately and automatically** the moment `Run Evaluation And Score` on `splits/hillclimb.json` hits the tuning target (`pass_rate >= tuning_target` or `0` failed queries) or completes the maximum hill-climbing iterations. Preempts any further optimization loops.
-*   **Goal**: Appended immediately after auto-hill-climbing convergence with zero additional user-facing steps. Evaluates the final mutated context set on `splits/holdout.json` strictly once in a single read-only pass, executes the two-proportion pooled z-test via `evaluate_generalizability`, displays the novice-friendly On-Screen Card in chat, and writes `final_evaluation_report.md`.
+*   **Automatic Entry Trigger**: Triggered **immediately and automatically** the moment the hill-climb loop stops (tuning target, plateau, or iteration cap) and the best iteration has been **published** under the bare `<context_set_id>` (`## Final:` present in `state.md`). Preempts any further optimization loops. Not triggered after a `## User Stop`.
+*   **Goal**: Appended immediately after publish with zero additional user-facing steps. Evaluates the **published** context set on `splits/holdout.json` strictly once in a single read-only pass, executes the two-proportion pooled z-test via `evaluate_generalizability`, displays the novice-friendly On-Screen Card in chat, and writes `final_evaluation_report.md`.
 *   **Zero-Leakage Invariant**: The holdout partition (`splits/holdout.json`) is strictly isolated during the entire hill-climbing optimization loop (zero data leakage). It must never be accessed for gap analysis, candidate selection, error harvesting, or context mutation. It is evaluated strictly once at workflow conclusion.
 *   **Entry Prerequisites**:
-    *   [ ] **Optimization Converged / Tuning Target Met**: The evaluation pass on the hillclimbing set (`splits/hillclimb.json`) has achieved the tuning target accuracy (`pass_rate >= tuning_target`) or completed all hill-climbing iterations.
-    *   [ ] **Holdout Precondition Met**: `.context-engineering/experiments/<experiment_name>/splits/holdout.json` exists (if skipped by user override, see Skip Scenario below).
+    *   [ ] **Published**: `state.md` contains `## Final: <final resource> (from vK, score <S>)` — the best iteration is live under the bare `<context_set_id>` and `_draft` has been deleted.
+    *   [ ] **Holdout Precondition Met**: `.context-engineering/experiments/<experiment_name>/splits/holdout.json` exists. It always does when the dataset came through `context-engineering-dataset-generation` (the split is mandatory); if it is missing, stop and route to that skill — do not report a verdict without it.
 
 #### Workflow & Execution Steps
 
-1.  **Precondition Check & Skip Handling**:
-    *   Verify whether `.context-engineering/experiments/<experiment_name>/splits/holdout.json` exists.
-    *   **Skip Scenario (b - User Override)**: If `splits/holdout.json` is missing because holdout generation was declined:
-        *   Log in `.context-engineering/state.md`:
-            ```markdown
-            - active_phase: COMPLETED_HILLCLIMB_ONLY
-            - test_dataset_path: NONE (user override at Step 1.0)
-            - generalizability_test: SKIPPED
-            - generalizability_skip_reason: "Precondition unmet: holdout split generation was skipped by user override. Generalizability metric and statistical significance test were not computed."
-            ```
-        *   Present standard optimization completion on the hillclimbing set in chat and conclude the workflow without holdout evaluation.
-
-2.  **Single Read-Only Holdout Evaluation (Autonomous Zero-Prompt Execution)**:
-    *   **Do NOT Prompt or Ask Permission**: Reuse the active `experiment_name`, `toolbox_config_path` (`.context-engineering/tools.yaml`), `toolbox_source_name`, and the just-evaluated `context_set_id` (e.g., `projects/<project_id>/locations/<location>/contextSets/<context_set_name>`) from the final hillclimbing evaluation without asking the user for any parameters or confirmation.
-    *   **Generate Holdout Evalbench Configs**: Immediately call the `generate_evalbench_configs` MCP tool with `output_dir=".context-engineering/experiments/<experiment_name>/"`, `dataset_path=".context-engineering/experiments/<experiment_name>/splits/holdout.json"`, and the reused `context_set_id`, `toolbox_config_path`, and `toolbox_source_name`.
+1.  **Single Read-Only Holdout Evaluation (Autonomous Zero-Prompt Execution)**:
+    *   **Do NOT Prompt or Ask Permission**: Reuse `experiment_name`, `toolbox_config_path` (`.context-engineering/tools.yaml`), `toolbox_source_name` (from `## Active Database` in `state.md`), and the **published** `context_set_id` (`Final resource` in `state.md`, i.e. `projects/<project_id>/locations/<location>/contextSets/<context_set_id>`) without asking the user for any parameters or confirmation.
+    *   **Generate Holdout Evalbench Configs**: Immediately call the `generate_evalbench_configs` MCP tool with `output_dir=".context-engineering/experiments/<experiment_name>/holdout_eval/"`, `dataset_path=".context-engineering/experiments/<experiment_name>/splits/holdout.json"`, and the reused `context_set_id`, `toolbox_config_path`, and `toolbox_source_name`.
     *   **Run Holdout Evaluation**: Immediately execute the canonical Evalbench command:
-        `uvx google-evalbench@1.17.0 --experiment_config=.context-engineering/experiments/<experiment_name>/eval_configs/run_config.yaml`
-    *   **Extract Scores**: Extract `test_passed` and `test_total` from the resulting holdout evaluation run (`summary.csv` in the latest `eval_reports/` folder), and retrieve `dev_passed` and `dev_total` from the final hillclimbing iteration.
+        `uvx google-evalbench@1.17.0 --experiment_config=.context-engineering/experiments/<experiment_name>/holdout_eval/eval_configs/run_config.yaml`
+    *   **Extract Scores**: Extract `test_passed` and `test_total` from `holdout_eval/eval_reports/<job_id>/summary.csv`, and retrieve `dev_passed` and `dev_total` from the published iteration's (`vK`) entry in the `state.md` Iteration Log.
 
-3.  **Statistical Significance Testing (Two-Proportion Pooled z-Test)**:
-    *   Call the `evaluate_generalizability` tool with `dev_passed`, `dev_total`, `test_passed`, `test_total`, `alpha=0.05`, and the `context_set_id` of the final hill-climbing iteration.
+2.  **Statistical Significance Testing (Two-Proportion Pooled z-Test)**:
+    *   Call the `evaluate_generalizability` tool with `dev_passed`, `dev_total`, `test_passed`, `test_total`, `alpha=0.05`, and the published `context_set_id` (bare `<context_set_id>` resource name).
     *   **Statistical Formulation**:
         *   $p_{\text{dev}} = \frac{x_{\text{dev}}}{N_{\text{dev}}}$, $p_{\text{test}} = \frac{x_{\text{test}}}{N_{\text{test}}}$
         *   $p_{\text{pool}} = \frac{x_{\text{dev}} + x_{\text{test}}}{N_{\text{dev}} + N_{\text{test}}}$
@@ -219,9 +215,9 @@ As the master orchestrator, this skill strictly governs phase transitions after 
         *   **INVESTIGATE**: $p < 0.05$ AND $p_{\text{dev}} > p_{\text{test}}$ (statistically significant drop indicating overfitting to hillclimbing wording).
         *   **PASS**: $p \ge 0.05$ with $N_{\text{test}} \ge 45$, OR $p_{\text{test}} \ge p_{\text{dev}}$ (no statistically significant drop; context generalizes reliably).
 
-4.  **Agent On-Screen Interface (Primary Chat Output)**:
+3.  **Agent On-Screen Interface (Primary Chat Output)**:
     *   **Core Principle**: The chat card is the primary user interface. Novice users should never be required to open a markdown file to understand the verdict, performance, or next steps.
-    *   **Order by Decision Relevance**: Status & Verdict $\rightarrow$ Performance Overview (4-column table) $\rightarrow$ Plain-Language Summary & Diagnosis $\rightarrow$ Immediate Next Step (including the **full `context_set_id`** of the final hill-climbing iteration when ready for production).
+    *   **Order by Decision Relevance**: Status & Verdict $\rightarrow$ Performance Overview (4-column table) $\rightarrow$ Plain-Language Summary & Diagnosis $\rightarrow$ Immediate Next Step (including the **full published `context_set_id`** resource name when ready for production).
     *   **Plain-Language Terminology**: Use "Hillclimbing Questions" and "Holdout Questions" (not ML jargon). Explain differences humanely (e.g. `Difference: -1 queries (-3.3%, within expected variance)`). Restrict formulas, z-scores, and p-values to `final_evaluation_report.md`.
     *   **On-Screen Card Templates**:
 
@@ -240,7 +236,7 @@ As the master orchestrator, this skill strictly governs phase transitions after 
 
             **Summary**:
             * **Robustness**: The model is generalizing well and not simply memorizing hillclimbing phrases. The minor difference between hillclimbing and holdout (87% vs 90%) is well within normal statistical expectations.
-            * **Next Step**: Export `improved_context_vN.json` or the full context set ID (`<full_context_set_id>`) of the final hill climb to production. No further optimization iterations required.
+            * **Next Step**: The context set is already published at `<full published context_set_id>` (from iteration `vK`, local file `vK/context_set_vK.json`). Point your application at it. No further optimization iterations required.
             ```
 
         *   **Case 2: INCONCLUSIVE — Sample Size Too Small**:
@@ -283,8 +279,8 @@ As the master orchestrator, this skill strictly governs phase transitions after 
               - **Expand Dataset**: Generate 50 more query patterns to broaden overall entity coverage.
             ```
 
-5.  **Save Final Evaluation Report (`final_evaluation_report.md`)**:
-    *   Write the comprehensive audit report to `.context-engineering/experiments/<experiment_name>/hillclimb/final_evaluation_report.md`.
+4.  **Save Final Evaluation Report (`final_evaluation_report.md`)**:
+    *   Write the comprehensive audit report to `.context-engineering/experiments/<experiment_name>/final_evaluation_report.md`.
     *   Ordered strictly by decision relevance (Verdict & Status $\rightarrow$ Recommended Action / Next Steps $\rightarrow$ Performance Overview & Failure Breakdown $\rightarrow$ Statistical Details):
         *   `TL;DR`: Verdict, Next Steps, Generalization Drop, Significance Assessment, Summary.
         *   `1. ACTIONABLE RECOMMENDATIONS`: Concrete recommended action and next steps for the user placed at the top.
@@ -292,8 +288,30 @@ As the master orchestrator, this skill strictly governs phase transitions after 
         *   `3. HOLDOUT SET FAILURE BREAKDOWN`: Query-by-query breakdown of failed holdout cases with category and root cause.
         *   `4. STATISTICAL DETAILS`: Two-proportion pooled z-test, sample sizes ($N_{\text{dev}}, x_{\text{dev}}, N_{\text{test}}, x_{\text{test}}$), pooled proportion ($\hat{p}$), standard error ($SE$), test statistic ($z$), two-tailed $p$-value, and power analysis check placed at the bottom.
 
-6.  **Log State Tracking (`.context-engineering/state.md`)**:
-    *   Update `.context-engineering/state.md` to record the holdout evaluation run, holdout pass rate, and generalizability verdict (`PASS`, `INVESTIGATE`, `INCONCLUSIVE`, or `SKIPPED`).
+5.  **Log State Tracking (`state.md`)**:
+    *   Append a `## Generalizability` section to `.context-engineering/experiments/<experiment_name>/state.md` recording the holdout evaluation path (`holdout_eval/eval_reports/<job_id>/`), holdout score (`passed / total`), the verdict (`PASS`, `INVESTIGATE`, or `INCONCLUSIVE`), and the report path. See the example in `context-engineering-hillclimb/references/workspace.md`.
+
+#### Generalizability Diagnosis & Triage
+
+When a user provides a `final_evaluation_report.md` from a Generalizability Test, the agent must inspect the final **Verdict** and triage the failures to determine the correct re-optimization path.
+
+##### 1. Verdict: INCONCLUSIVE
+*   **Trigger:** The report indicates an INCONCLUSIVE verdict. This means the dataset is either too small or lacks the necessary variations to yield a statistically significant measure of generalizability.
+*   **Action:** Route immediately to [context-engineering-dataset-generation](../context-engineering-dataset-generation/SKILL.md). Execute the expansion workflow to scale up the dataset using template-preserving strategies until it meets the required volume and variation thresholds. Once expanded, restart the context engineering lifecycle.
+
+##### 2. Verdict: INVESTIGATE
+When the verdict is INVESTIGATE, the model suffered a statistically significant generalization drop.
+
+> [!IMPORTANT]
+> **Anti-Data Leakage Rule:** You are STRICTLY FORBIDDEN from manually patching ContextSet Templates to memorize the specific `golden_sql` answers from the holdout set. You must resolve the root capability gaps, not the exact test answers, to prevent overfitting.
+
+Read the report's actionable recommendations and route to the corresponding skill:
+*   **Path A: Context & Metadata Deficiencies (Value Linking / Business Rule Gaps)**
+    *   **Trigger:** Failures stem from a missing structural bridge between the user's intent and the database schema. This includes unmapped terminology, failure to link fuzzy search strings to strict database enums/IDs, or omitted table joins and filters.
+    *   **Action:** The dataset is fine; the gap is in the ContextSet's metadata. Route to [context-engineering-generation-guide](../context-engineering-generation-guide/SKILL.md). Author universally applicable `Value Searches` (for fuzzy logic) or parameterized `Facets` (for business filters) that bridge the missing logic. Apply via `mutate_context_set`, then restart `context-engineering-hillclimb` on the existing dataset.
+*   **Path B: Curriculum Deficiencies (Phrasing Diversity Gaps)**
+    *   **Trigger:** Failures stem from unseen concepts, colloquialisms, shorthand, or linguistic structures that the model was never exposed to within the training dataset.
+    *   **Action:** Direct context patching is forbidden as it causes overfitting. Route to [context-engineering-dataset-generation](../context-engineering-dataset-generation/SKILL.md) to execute the expansion workflow. Generate new, diverse question/SQL pairs that teach the missing vocabulary and append them to the training split (`hillclimb.json`). Finally, restart `context-engineering-hillclimb` so the loop can learn the newly expanded curriculum.
 
 ---
 

@@ -1,12 +1,12 @@
 ---
 name: context-engineering-init
-description: Ensure the environment is ready for context-engineering work — manage the Toolbox `tools.yaml` for database connections, verify runtime and GCP setup (uv, evalbench, ADC, Dataplex/GDA APIs, IAM), and diagnose readiness failures raised by other skills.
+description: Ensure the environment is ready for context-engineering work — manage the Toolbox `tools.yaml` for database connections, verify runtime and GCP setup (uv, evalbench, ADC, Dataplex/GDA APIs, IAM), initialise the experiment `state.md` (Context Store coordinates and run preferences), and diagnose readiness failures raised by other skills.
 ---
 
 # Skill: Environment & Connection Setup
 
 ## Goal
-Ensure the caller's environment is ready for context-engineering work: Toolbox `tools.yaml` in place with at least one verified DB source, and (when asked or when downstream failures need diagnosis) runtime + GCP readiness verified. Manage `tools.yaml` on request; run any subset of checks on request.
+Ensure the caller's environment is ready for context-engineering work: Toolbox `tools.yaml` in place with at least one verified DB source, the experiment `state.md` initialised with the Context Store coordinates and run preferences that downstream skills read instead of re-asking, and (when asked or when downstream failures need diagnosis) runtime + GCP readiness verified. Manage `tools.yaml` on request; run any subset of checks on request.
 
 ## Prerequisites
 - `gcloud` CLI on PATH.
@@ -44,6 +44,25 @@ After any write, instruct the user to restart the MCP server so downstream skill
 - Gemini CLI: `/mcp reload`
 - Claude Code: `/mcp` → `toolbox` → Reconnect (or `/quit` and relaunch)
 - Antigravity CLI: `/mcp` → `toolbox` → Restart
+
+### Initialise the experiment `state.md`
+
+Run this when a user is starting a hill-climb experiment, or when a downstream skill routes here because `.context-engineering/experiments/<experiment_name>/state.md` is missing or incomplete. Everything below is asked **once**; downstream skills (`dataset-generation`, `bootstrap`, `hillclimb`, `evaluate`, `workflow`) read the answers from `state.md` and never re-ask. If the file already exists, only fill in the missing bullets — do not overwrite existing values or any `## Iteration Log`.
+
+1. **Experiment name** — ask for a short slug (e.g. `retail-graph`). The workspace root is `.context-engineering/experiments/<experiment_name>/`.
+2. **Project** — the GCP project id (default: ADC's project).
+3. **Location** — call `list_context_set_locations(project_id)` and let the user pick from the returned list (if they named one, confirm it is in the list). Do not assume a default.
+4. **Context set id** — the name the **final** context set is published under. Default: the experiment name. Derive `Final resource` = `projects/<project>/locations/<location>/contextSets/<context_set_id>` and `Draft resource` = `…/contextSets/<context_set_id>_draft`.
+5. **Overwrite acknowledgement** — probe the bare id with `get_context_set(Final resource)`.
+   - NOT_FOUND → nothing to overwrite; record `Overwrite acknowledged: yes`.
+   - Exists → tell the user the exact resource name, explain that the hill-climb publish will **silently replace** its contents, and ask for an explicit yes. Record `Overwrite acknowledged: yes` only on an explicit yes; otherwise ask for a different `Context set id` and probe again.
+6. **Seed resource** (optional) — an existing Context Store resource name to start from. Record it as `Seed resource: <resource name>`; the loop reads it once and never deletes or overwrites it. Otherwise record `Seed resource: (none — seeded from bootstrap)` or `Seed resource: (local file: <path>)`.
+7. **Upload approval** — ask once: *"Should I upload each improved draft to the Context Store automatically, or pause for your approval before every upload?"* Record `Auto-approve uploads: true` (automatic) or `false` (pause before each `_draft` upload).
+8. **Loop parameters** — offer the defaults and record whatever the user settles on: `Tuning target: 1.0`, `Plateau k: 3`, `Max iterations: 10`.
+9. **Enrichment sources** (optional) — design docs, application code paths, or notes that `bootstrap` should read. Record as `Enrichment sources: [...]`.
+10. **Active database** — from `tools.yaml`, record the Toolbox `<source>` name and type under `## Active Database`. For Spanner GoogleSQL, call `<source>-list-graphs` and record the property graph ids as `- **Graph Ids**: [...]` (`[]` if none) — `generate_evalbench_configs` reads this bullet.
+
+Write the file in the format shown in `context-engineering-hillclimb/references/workspace.md` (a `## Metadata` section with the bullets above, then `## Active Database`). Confirm the path and the recorded values back to the user in one short summary.
 
 ### Verify environment (broad or scoped)
 

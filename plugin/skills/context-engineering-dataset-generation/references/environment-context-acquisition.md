@@ -39,6 +39,6 @@ This protocol serves as a guide to build a comprehensive, grounded understanding
     - If the ingested artifacts or schema reveal additional targets beyond what the user initially specified (or if the user provided an initial subset):
       - Identify the complete set relevant from schemas and ingested artifacts.
       - Propose the expanded list of targets in `evalset_gen_plan.md` under **Key Decisions Needing Human Review**.
-      - Update `autoctx/state.md` under `## Active Database -> - **Graph Ids**: [...]` with the expanded list.
+      - Update the experiment `state.md` (`.context-engineering/experiments/<experiment_name>/state.md`) under `## Active Database -> - **Graph Ids**: [...]` with the expanded list.
     - Record scope findings and discrepancies in `evalset_environment_inputs.md`.
-*   **Required State:** Recorded scope findings in `evalset_environment_inputs.md` and updated `autoctx/state.md` ready to be integrated into `evalset_gen_plan.md`.
+*   **Required State:** Recorded scope findings in `evalset_environment_inputs.md` and updated experiment `state.md` ready to be integrated into `evalset_gen_plan.md`.
