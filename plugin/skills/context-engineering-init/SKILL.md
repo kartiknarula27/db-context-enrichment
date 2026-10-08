@@ -61,6 +61,7 @@ Run this when a user is starting a hill-climb experiment, or when a downstream s
 8. **Loop parameters** — offer the defaults and record whatever the user settles on: `Tuning target: 1.0`, `Plateau k: 3`, `Max iterations: 10`.
 9. **Enrichment sources** (optional) — design docs, application code paths, or notes that `bootstrap` should read. Record as `Enrichment sources: [...]`.
 10. **Active database** — from `tools.yaml`, record the Toolbox `<source>` name and type under `## Active Database`. For Spanner GoogleSQL, call `<source>-list-graphs` and record the property graph ids as `- **Graph Ids**: [...]` (`[]` if none) — `generate_evalbench_configs` reads this bullet.
+11. **Existing dataset** — the golden dataset and its splits live at the **DB level**, shared by every experiment on this connection: `.context-engineering/golden.json`, `.context-engineering/splits/hillclimb.json`, `.context-engineering/splits/holdout.json`. If they already exist (a previous experiment generated them), record them now as `Golden dataset`, `Hillclimb dataset`, `Holdout dataset` bullets and tell the user the experiment will reuse them. If they don't, leave the bullets out — `context-engineering-dataset-generation` fills them in.
 
 Write the file in the format shown in `context-engineering-hillclimb/references/workspace.md` (a `## Metadata` section with the bullets above, then `## Active Database`). Confirm the path and the recorded values back to the user in one short summary.
 

@@ -12,7 +12,7 @@ Given a golden dataset and (optionally) a base context, autonomously produce a h
 
 ## Prerequisites
 - A working DB connection — Toolbox MCP tools (`<source>-list-schemas`, `<source>-execute-sql`) must be visible to the agent throughout the run. If missing or unreachable at any point, stop and route through `context-engineering-init`; do not work around it (no bash `uvx toolbox-server invoke` fallback).
-- A golden evaluation dataset split by `context-engineering-dataset-generation` — the loop evaluates on `splits/hillclimb.json` only; `splits/holdout.json` is never read until after publish (see the Holdout Evaluation phase in `context-engineering-workflow`).
+- A golden evaluation dataset split by `context-engineering-dataset-generation`, stored at the DB level (`.context-engineering/golden.json`, `.context-engineering/splits/hillclimb.json`, `.context-engineering/splits/holdout.json`) and recorded in `state.md` — the loop evaluates on `splits/hillclimb.json` only; `splits/holdout.json` is never read until after publish (see the Holdout Evaluation phase in `context-engineering-workflow`).
 - ADC configured and the Gemini Data Analytics + Dataplex APIs enabled on the project (see `context-engineering-init` for preflight).
 - A starting context — none, a local file, or an existing Context Store resource name. Entry flow spells out the handling per case.
 - An experiment `state.md` written by `context-engineering-init` at `.context-engineering/experiments/<experiment_name>/state.md`. It holds the Context Store coordinates (`project_id`, `location`, `context_set_id` — the name the **final** context set is published under), the upload-approval preference, and the loop parameters. If it is missing, route to `context-engineering-init` first. Every iteration overwrites one working copy, `<context_set_id>_draft`; it is deleted once, after publish — see the Context Store (OneMCP) Protocol in `context-engineering-workflow`.
@@ -41,7 +41,7 @@ The publish to the bare id never asks: the overwrite was acknowledged in init (`
    - **Local file** → copy it to `v0/context_set_v0.json`.
    - **Existing Context Store resource name** (`Seed resource` in `state.md`) → call `get_context_set` on it, parse `payload`, and write it to `v0/context_set_v0.json`. **This resource is user-owned: the loop never deletes or overwrites it.**
 
-   Then baseline-evaluate `v0`: upload `v0/context_set_v0.json` to `<context_set_id>_draft` (approval tier applies) → poll gate → evaluate into `v0/eval/` on `splits/hillclimb.json` → record the baseline score. Write the `### v0` entry to `state.md`. Iteration loop starts at `v1`.
+   Then baseline-evaluate `v0`: upload `v0/context_set_v0.json` to `<context_set_id>_draft` (approval tier applies) → poll gate → evaluate into `v0/eval/` on the `Hillclimb dataset` from `state.md` (`.context-engineering/splits/hillclimb.json`) → record the baseline score. Write the `### v0` entry to `state.md`. Iteration loop starts at `v1`.
 
 ### Per-iteration loop (`vN`)
 1. **Prepare `vN/`**: append the `## In-Progress: vN` marker to `state.md`, create the iteration directory, and seed `context_set_vN.json` by copying `v(N-1)/context_set_v(N-1).json` from disk. Local files are the only durable record, so there is no remote fallback: if the local file is missing (crash), copy the most recent `vK/context_set_vK.json` that does exist; if none exists, re-run the entry-flow seed.
@@ -50,7 +50,7 @@ The publish to the bare id never asks: the overwrite was acknowledged in init (`
    - **Use `pipeline_debug_info`**: If a failure case's Additional Output contains it, use this generation trace (showing which context the API retrieved and used) to ground the root cause (e.g., distinguishing a missing template match vs. a bad column reference) rather than guessing.
 3. **Mutate**: plan mutations from the analysis (prefer fewer general items — a facet often beats many templates). Author new items via `context-engineering-generation-guide`. Validate generated SQL via `<source>-execute-sql` and column references via `<source>-list-schemas`. Apply via `mutate_context_set` to `context_set_vN.json`.
 4. **Upload the working copy** (approval tier applies): `upload_context_set(context_set=projects/<project_id>/locations/<location>/contextSets/<context_set_id>_draft, local_file_path=vN/context_set_vN.json)` → poll gate until `done: true`. This overwrites the previous iteration's copy. Record the operation name in `state.md`.
-5. **Evaluate**: invoke `context-engineering-evaluate` with `cs_resource_name=<the _draft resource>`, the dataset `splits/hillclimb.json`, and `output_dir=<workspace>/vN/eval/`. Capture `job_id`, `passed`, `total` and overall score.
+5. **Evaluate**: invoke `context-engineering-evaluate` with `cs_resource_name=<the _draft resource>`, the `Hillclimb dataset` path from `state.md` (`.context-engineering/splits/hillclimb.json`), and `output_dir=<workspace>/vN/eval/`. Capture `job_id`, `passed`, `total` and overall score.
 6. **Update `state.md`**: replace the `## In-Progress: vN` marker with the final `### vN` entry (local file, eval report path, analysis path, score, upload operation name).
 7. **Check the stopping conditions** (see below). If none fired, continue to `v(N+1)`.
 

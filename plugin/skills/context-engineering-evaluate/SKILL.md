@@ -42,11 +42,11 @@ Score a ContextSet against a golden dataset by running Evalbench, and return a s
 
 1. **Collect inputs.** Prompt only for what's missing from the Prerequisites. Trust `tools.yaml` values as-is — don't ask the user to re-verify them.
    - **Dataset Selection & Hillclimb/Holdout Split Check**:
-     - Check for available dataset files in the workspace (or `<output_dir>/splits/`): `splits/hillclimb.json`, `splits/holdout.json`, or the full golden dataset.
+     - Check for available dataset files at the DB level of the workspace, `.context-engineering/` (next to `tools.yaml`): `.context-engineering/splits/hillclimb.json`, `.context-engineering/splits/holdout.json`, or the full golden dataset `.context-engineering/golden.json`. Splits are shared by every experiment on the connection, so never look for them under `experiments/<experiment_name>/`.
      - **If `splits/hillclimb.json` exists**: Default to evaluating on `splits/hillclimb.json`. `splits/holdout.json` is reserved for the Holdout Evaluation phase in `context-engineering-workflow`; evaluate it only when that phase (or the user, explicitly) asks for it.
      - **If `splits/` does NOT exist yet**: Ask the user:
        > *"Would you like to set up a Hillclimb/Holdout split now (via the `split_dataset` tool to prepare for generalizability testing during hill-climbing), or run a baseline evaluation against all questions?"*
-       - If they choose the split: Invoke the `split_dataset` MCP tool with `golden_dataset_path` and `output_dir` to generate `splits/hillclimb.json` and `splits/holdout.json`, then evaluate on `splits/hillclimb.json`.
+       - If they choose the split: Invoke the `split_dataset` MCP tool with `golden_dataset_path` and `output_dir=.context-engineering/` to generate `.context-engineering/splits/hillclimb.json` and `.context-engineering/splits/holdout.json`, then evaluate on `splits/hillclimb.json`.
        - If they choose full evaluation: Evaluate directly against the provided golden dataset.
 
 2. **Prepare the ContextSet resource name.**

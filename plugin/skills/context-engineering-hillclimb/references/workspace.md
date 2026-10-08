@@ -1,38 +1,46 @@
 # Hill-Climbing Workspace Layout
 
-The hill-climbing skill maintains an internal workspace to track iterations, evaluation reports, and mutation history. All paths are relative to `<workspace_root>` (default `.context-engineering/experiments/<experiment_name>/`).
+The hill-climbing skill maintains an internal workspace to track iterations, evaluation reports, and mutation history. Two roots matter:
+
+- `<ce_root>` = `.context-engineering/` — **DB-level**, shared by every experiment on the same connection. Holds `tools.yaml`, the golden dataset and its splits.
+- `<workspace_root>` = `.context-engineering/experiments/<experiment_name>/` — **per experiment**. Unless stated otherwise, paths below are relative to `<workspace_root>`.
 
 ## Directory structure
 
 ```
-<workspace_root>/
-├── state.md                       # written by init; metadata + per-iteration scores + notes
-├── golden.json                    # full golden dataset (context-engineering-dataset-generation)
+.context-engineering/                  # <ce_root> — one per DB connection
+├── tools.yaml                         # DB connection (context-engineering-init)
+├── golden.json                        # full golden dataset (context-engineering-dataset-generation)
 ├── splits/
-│   ├── hillclimb.json             # optimization split — the only dataset the loop evaluates on
-│   └── holdout.json               # held out until after publish; never read by the loop
-├── v<N>/                          # one directory per iteration (v0 = base, v1+ = mutations)
-│   ├── context_set_v<N>.json      # ContextSet snapshot at this version
-│   ├── analysis_v<N>.md           # findings + reasoning + mutations applied
-│   └── eval/                      # output_dir for context-engineering-evaluate
-│       ├── eval_configs/          # generated Evalbench YAMLs + converted dataset
-│       │   ├── db_config.yaml
-│       │   ├── model_config.yaml
-│       │   ├── run_config.yaml
-│       │   ├── llmrater_config.yaml
-│       │   └── golden_queries.json
-│       └── eval_reports/<job_id>/
-│           ├── scores.csv
-│           └── summary.csv
-├── holdout_eval/                  # output_dir for the single holdout evaluation (after publish)
-└── final_evaluation_report.md     # generalizability report (Holdout Evaluation phase)
+│   ├── hillclimb.json                 # optimization split — the only dataset the loop evaluates on
+│   └── holdout.json                   # held out until after publish; never read by the loop
+└── experiments/
+    └── <experiment_name>/             # <workspace_root> — one per experiment
+        ├── state.md                   # written by init; metadata + per-iteration scores + notes
+        ├── v<N>/                      # one directory per iteration (v0 = base, v1+ = mutations)
+        │   ├── context_set_v<N>.json  # ContextSet snapshot at this version
+        │   ├── analysis_v<N>.md       # findings + reasoning + mutations applied
+        │   └── eval/                  # output_dir for context-engineering-evaluate
+        │       ├── eval_configs/      # generated Evalbench YAMLs + converted dataset
+        │       │   ├── db_config.yaml
+        │       │   ├── model_config.yaml
+        │       │   ├── run_config.yaml
+        │       │   ├── llmrater_config.yaml
+        │       │   └── golden_queries.json
+        │       └── eval_reports/<job_id>/
+        │           ├── scores.csv
+        │           └── summary.csv
+        ├── holdout_eval/              # output_dir for the single holdout evaluation (after publish)
+        └── final_evaluation_report.md # generalizability report (Holdout Evaluation phase)
 ```
+
+The dataset lives at `<ce_root>` because it describes the database, not an experiment: several experiments (different seeds, loop parameters, or context set ids) evaluate against the same `splits/hillclimb.json` / `splits/holdout.json`, which keeps their scores comparable.
 
 ## `state.md` format
 
 `state.md` is the single source of truth for the experiment. `context-engineering-init` creates it with the first two sections; later phases append to it. It must contain:
 
-- **Metadata** (init) — experiment name, workspace root, DB source (from `tools.yaml`), enrichment sources, the Context Store coordinates `project_id`, `location`, `context_set_id`, whether the user pre-approved draft uploads, and the loop parameters (tuning target, plateau k, max iterations). From the coordinates, the final resource is `projects/<project_id>/locations/<location>/contextSets/<context_set_id>` and the single working copy the loop overwrites every iteration is `projects/<project_id>/locations/<location>/contextSets/<context_set_id>_draft`. If `v0` is seeded from a user-supplied existing resource, record that resource name under `Seed resource` so it is never treated as a draft. Dataset paths are filled in by `context-engineering-dataset-generation`.
+- **Metadata** (init) — experiment name, workspace root, DB source (from `tools.yaml`), enrichment sources, the Context Store coordinates `project_id`, `location`, `context_set_id`, whether the user pre-approved draft uploads, and the loop parameters (tuning target, plateau k, max iterations). From the coordinates, the final resource is `projects/<project_id>/locations/<location>/contextSets/<context_set_id>` and the single working copy the loop overwrites every iteration is `projects/<project_id>/locations/<location>/contextSets/<context_set_id>_draft`. If `v0` is seeded from a user-supplied existing resource, record that resource name under `Seed resource` so it is never treated as a draft. Dataset paths point at `<ce_root>` (`.context-engineering/golden.json`, `.context-engineering/splits/…`) and are filled in by `context-engineering-dataset-generation`; if the splits already exist when init runs (a second experiment on the same DB), init records them directly.
 - **Active Database** (init; expanded by dataset-generation) — source name, type, and `**Graph Ids**` for Spanner GoogleSQL property graphs. `generate_evalbench_configs` reads `**Graph Ids**` from this file to scope Spanner Graph evaluations.
 - **Iteration Log** (hillclimb) — one entry per completed iteration, in order. Each entry records the local file, the score, and the working-copy upload operation name.
 - **Final** (hillclimb) — written once by the Finalize step, together with the working-copy delete operation.
@@ -58,9 +66,9 @@ Example:
 - Tuning target: 1.0
 - Plateau k: 3
 - Max iterations: 10
-- Golden dataset: golden.json
-- Hillclimb dataset: splits/hillclimb.json
-- Holdout dataset: splits/holdout.json
+- Golden dataset: ./.context-engineering/golden.json
+- Hillclimb dataset: ./.context-engineering/splits/hillclimb.json
+- Holdout dataset: ./.context-engineering/splits/holdout.json
 
 ## Active Database
 - **Source Name**: my-alloydb
