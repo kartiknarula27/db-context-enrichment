@@ -82,7 +82,7 @@ Commands in parentheses are examples — the agent may use its own approach.
 
 ### GCP authentication
 - **ADC configured** — required by every GCP API call (Context Store, QueryData, Dataplex). (Example: `gcloud auth application-default print-access-token`; fix via `gcloud auth application-default login`.)
-- **ADC quota project set** — required by Context Store; the `X-Goog-User-Project` header is derived from it. Missing → 400 on upload/download. (Example: `gcloud auth application-default print-quota-project`; fix via `gcloud auth application-default set-quota-project <project>`.)
+- **ADC quota project set** — required by Context Store; the `X-Goog-User-Project` header is derived from it. Missing → 400 on upload/download. (Example: check `quota_project_id` in `~/.config/gcloud/application_default_credentials.json`, e.g. `python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.config/gcloud/application_default_credentials.json'))).get('quota_project_id'))"`; fix via `gcloud auth application-default set-quota-project <project>`.)
 
 ### GCP API enablement
 - **Dataplex API** (`dataplex.googleapis.com`) — required by every Context Store tool (`list_context_set_locations`, `upload_context_set`, `get_context_set`, `delete_context_set`, `get_operation`). See the Context Store (OneMCP) Protocol in `context-engineering-workflow` for how these are used.

@@ -17,10 +17,8 @@ Every manifest declares three MCP servers:
 ### Context Store (`contextmgmt`)
 
 The Context Store tools are **not** implemented in this repo; the agent
-calls the remote server directly. The manifests point at the staging
-endpoint for now
-(`https://staging-dataplex.sandbox.googleapis.com/mcp/managed-context-sets`);
-flipping to prod is a one-line URL change in each manifest.
+calls the remote server directly. The manifests point at **prod**
+(`https://dataplex.googleapis.com/mcp/managed-context-sets`).
 
 Auth is `authProviderType: "google_credentials"`: the client mints a
 bearer token from Application Default Credentials (scope
@@ -38,10 +36,16 @@ Client support:
   `authProviderType`). Supported natively.
 - **Gemini CLI** — `gemini-extension.json` / `plugin/gemini-extension.json`
   (`httpUrl` + `authProviderType` + `oauth.scopes`). Supported natively.
-- **Claude Code** — `plugin/mcp.json` does **not** yet declare the
-  remote server (Claude needs an `http` entry with a `headersHelper`
-  that prints the ADC bearer token). Until that lands, the Context
-  Store tools are unavailable in Claude Code.
+- **Claude Code** — `plugin/.claude-plugin/plugin.json` (`type: http` +
+  `url` + `headersHelper`). Claude has no native Google-credentials
+  provider, so `plugin/scripts/adc_headers.sh` mints the headers from ADC
+  (`Authorization: Bearer <token>` and `X-Goog-User-Project` from the ADC
+  quota project). Claude re-runs the helper on 401/403, which covers token
+  expiry. Only dependency: `gcloud` on `PATH`. **Untested by the
+  core team so far** — verified by contributors with Claude Code access.
+- **Agent Plugins clients** (`plugin/mcp.json`, VS Code / Cursor / …) —
+  the remote server is **not** declared yet: that spec has no dynamic-header
+  hook, so those clients would need a static token. Follow-up.
 
 ### Antigravity tool-name length limit
 

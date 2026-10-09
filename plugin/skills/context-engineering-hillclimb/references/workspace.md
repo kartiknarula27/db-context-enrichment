@@ -10,6 +10,12 @@ The hill-climbing skill maintains an internal workspace to track iterations, eva
 ```
 .context-engineering/                  # <ce_root> — one per DB connection
 ├── tools.yaml                         # DB connection (context-engineering-init)
+├── dataset/                           # working files of context-engineering-dataset-generation
+│   ├── evalset_environment_inputs.md  # domain map, artifact registry, seed pairs
+│   ├── evalset_gen_plan.md            # user-approved generation plan
+│   ├── temp_golden.json               # interim dataset during generation/expansion
+│   ├── evalset_report_pair_level.md   # audit report 1
+│   └── evalset_report_dataset_level.md  # audit report 2
 ├── golden.json                        # full golden dataset (context-engineering-dataset-generation)
 ├── splits/
 │   ├── hillclimb.json                 # optimization split — the only dataset the loop evaluates on

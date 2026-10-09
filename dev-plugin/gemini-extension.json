@@ -21,7 +21,7 @@
       ]
     },
     "contextmgmt": {
-      "url": "https://staging-dataplex.sandbox.googleapis.com/mcp/managed-context-sets",
+      "url": "https://dataplex.googleapis.com/mcp/managed-context-sets",
       "authProviderType": "google_credentials"
     }
   }

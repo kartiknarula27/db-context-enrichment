@@ -20,6 +20,11 @@
         ".context-engineering/tools.yaml",
         "--stdio"
       ]
+    },
+    "contextmgmt": {
+      "type": "http",
+      "url": "https://dataplex.googleapis.com/mcp/managed-context-sets",
+      "headersHelper": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/adc_headers.sh\""
     }
   }
 }
