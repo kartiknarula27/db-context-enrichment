@@ -31,6 +31,17 @@ Before getting started, prepare your GCP environment, required APIs (Data Analyt
 Follow the step-by-step setup guide in the official documentation:
 👉 **Prepare Your Environment**: ([AlloyDB](https://docs.cloud.google.com/gemini/data-agents/querydata/alloydb/build-context-gemini-cli#prepare-your-environment) | Cloud SQL: [PostgreSQL](https://docs.cloud.google.com/gemini/data-agents/querydata/sql-postgres/build-context-gemini-cli#prepare-your-environment) / [MySQL](https://docs.cloud.google.com/gemini/data-agents/querydata/sql-mysql/build-context-gemini-cli#prepare-your-environment) | [Spanner](https://docs.cloud.google.com/gemini/data-agents/querydata/spanner/build-context-gemini-cli#prepare-your-environment))
 
+### Context Store access
+
+The plugin talks to the **Context Store** (upload / read / delete context sets) through a remote Google-hosted MCP server, authenticated with your Application Default Credentials. Before launching your agent, run:
+
+```bash
+gcloud auth application-default login
+gcloud auth application-default set-quota-project <your-project>
+```
+
+Antigravity and Gemini CLI attach the credentials automatically. Claude Code support for the remote Context Store server is in progress; see [docs/development.md](docs/development.md#context-store-contextmgmt).
+
 ---
 
 ## Primary Workflow Phases

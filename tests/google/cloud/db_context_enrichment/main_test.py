@@ -5,14 +5,9 @@ from pathlib import Path
 import pytest
 
 from google.cloud.db_context_enrichment.main import (
-    delete_context_set,
     generate_evalbench_configs,
-    get_context_set,
-    get_operation,
-    list_context_set_locations,
     mutate_context_set,
     read_evaluation_result,
-    upload_context_set,
     validate_context_set,
 )
 
@@ -180,86 +175,3 @@ async def test_read_evaluation_result_tool(tmp_path: Path):
     report = await read_evaluation_result(str(run_dir))
     assert "Evaluation Summary" in report
     assert "No failure cases found (all passed)." in report
-
-
-def test_upload_context_set_tool(monkeypatch, tmp_path: Path):
-    called = {}
-
-    def mock_upload(self, context_set, context_payload, description=""):
-        called["context_set"] = context_set
-        called["context_payload"] = context_payload
-        called["description"] = description
-        return {"operation": "op1"}
-
-    monkeypatch.setattr(
-        "google.cloud.db_context_enrichment.common.context_set_mcp_client.ContextSetMcpClient.upload_context_set",
-        mock_upload,
-    )
-    # 1. Test direct context_payload
-    res = upload_context_set(
-        context_set="projects/p/locations/l/contextSets/c",
-        context_payload='{"templates": []}',
-        description="test desc",
-    )
-    assert json.loads(res) == {"operation": "op1"}
-    assert called["context_set"] == "projects/p/locations/l/contextSets/c"
-    assert called["description"] == "test desc"
-
-    # 2. Test local_file_path
-    ctx_file = tmp_path / "ctx.json"
-    ctx_file.write_text('{"templates": []}')
-    res2 = upload_context_set(
-        context_set="projects/p/locations/l/contextSets/c",
-        local_file_path=str(ctx_file),
-    )
-    assert json.loads(res2) == {"operation": "op1"}
-
-    # 3. Test missing both raises ValueError
-    with pytest.raises(ValueError, match="Either 'context_payload' or 'local_file_path'"):
-        upload_context_set(context_set="projects/p/locations/l/contextSets/c")
-
-
-def test_get_context_set_tool(monkeypatch):
-    monkeypatch.setattr(
-        "google.cloud.db_context_enrichment.common.context_set_mcp_client.ContextSetMcpClient.get_context_set",
-        lambda self, cs: {"payload": "test_payload"},
-    )
-    res = get_context_set("projects/p/locations/l/contextSets/c")
-    assert json.loads(res) == {"payload": "test_payload"}
-
-
-def test_delete_context_set_tool(monkeypatch):
-    monkeypatch.setattr(
-        "google.cloud.db_context_enrichment.common.context_set_mcp_client.ContextSetMcpClient.delete_context_set",
-        lambda self, cs: {"name": "projects/p/locations/l/operations/op1"},
-    )
-    res = delete_context_set("projects/p/locations/l/contextSets/c")
-    assert json.loads(res) == {"name": "projects/p/locations/l/operations/op1"}
-
-
-def test_list_context_set_locations_tool(monkeypatch):
-    monkeypatch.setattr(
-        "google.cloud.db_context_enrichment.common.context_set_mcp_client.ContextSetMcpClient.list_context_set_locations",
-        lambda self, proj: ["us-central1"],
-    )
-    res = list_context_set_locations("my-project")
-    assert json.loads(res) == ["us-central1"]
-
-
-def test_get_operation_tool(monkeypatch):
-    monkeypatch.setattr(
-        "google.cloud.db_context_enrichment.common.context_set_mcp_client.ContextSetMcpClient.get_operation",
-        lambda self, p, l, op: {
-            "name": f"projects/{p}/locations/{l}/operations/{op}",
-            "done": True,
-        },
-    )
-    # Test passing full operation name
-    res = get_operation(operation_name="projects/p/locations/l/operations/op123")
-    assert json.loads(res)["done"] is True
-
-    # Test passing explicit parameters
-    res2 = get_operation(project_id="p", location="l", operation_id="op123")
-    assert json.loads(res2)["done"] is True
-
-

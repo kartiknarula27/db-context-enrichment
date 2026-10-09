@@ -1,6 +1,4 @@
 {
-  "name": "dbce-dev",
-  "version": "0.0.0-dev",
   "mcpServers": {
     "db-context-engineering": {
       "command": "uv",
@@ -9,7 +7,8 @@
         "--project",
         "<local-repo-path>",
         "google-cloud-db-context-engineering"
-      ]
+      ],
+      "cwd": "<local-workspace-path>"
     },
     "toolbox": {
       "command": "uvx",
@@ -18,7 +17,8 @@
         "--config",
         ".context-engineering/tools.yaml",
         "--stdio"
-      ]
+      ],
+      "cwd": "<local-workspace-path>"
     },
     "contextmgmt": {
       "url": "https://staging-dataplex.sandbox.googleapis.com/mcp/managed-context-sets",

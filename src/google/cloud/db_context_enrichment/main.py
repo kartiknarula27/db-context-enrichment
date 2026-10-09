@@ -1,11 +1,9 @@
 import json
-import pathlib
 
 from fastmcp import FastMCP
 
 from google.cloud.db_context_enrichment.common import (
     context_mutator,
-    context_set_mcp_client,
     context_validator,
 )
 from google.cloud.db_context_enrichment.dataset import (
@@ -17,7 +15,6 @@ from google.cloud.db_context_enrichment.evaluate import (
     generalizability,
     result_reader,
 )
-from google.cloud.db_context_enrichment.model import context
 
 mcp = FastMCP("Context Engineering Agent MCP")
 
@@ -165,217 +162,6 @@ def generate_evalbench_configs(
         toolbox_source_name,
     )
     return f"Successfully generated all configs for evaluation in {output_dir}/eval_configs/"
-
-
-@mcp.tool(
-    annotations={
-        "title": "Upload Context Set",
-        "readOnlyHint": False,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": False,
-    }
-)
-def upload_context_set(
-    context_set: str,
-    context_payload: str | None = None,
-    local_file_path: str | None = None,
-    description: str | None = None,
-) -> str:
-    """Uploads a context set. Creates it if it does not exist, otherwise OVERWRITES it in place.
-
-    There is no versioning: the previous contents of an existing context set are
-    replaced and cannot be recovered from the store. Before the first upload in
-    a session, confirm the project, location and context set id with the user
-    (the init skill records them under '## Metadata' in the experiment
-    state.md at .context-engineering/experiments/<experiment_name>/state.md,
-    and resolves the location via list_context_set_locations once).
-
-    Hill-climbing convention: iterate on the working copy
-    '<context_set_id>_draft' and upload to the bare '<context_set_id>' only
-    when publishing the best version. Never upload intermediate iterations to
-    the bare id.
-
-    Upload is asynchronous: this tool returns a Long-Running Operation, not a
-    finished result. To complete the upload the agent MUST:
-      1. Capture the operation's 'name' from the response.
-      2. Poll get_operation with that name until the response has 'done': true.
-    Do not evaluate or otherwise use the context set until 'done': true is observed.
-
-    Supply the ContextSet body as exactly one of 'local_file_path' (preferred —
-    the file is read and sent without passing through the model) or
-    'context_payload' (inline JSON string).
-
-    Args:
-        context_set: Canonical resource name (format:
-            projects/{project}/locations/{location}/contextSets/{context_set}).
-        context_payload: Inline ContextSet JSON string.
-        local_file_path: Path to a local ContextSet JSON file.
-        description: Optional human-readable description of the context set.
-
-    Returns:
-        JSON string containing the Long-Running Operation (includes 'name').
-    """
-    if not context_payload and not local_file_path:
-        raise ValueError(
-            "Either 'context_payload' or 'local_file_path' must be provided to upload_context_set."
-        )
-
-    if local_file_path:
-        text = pathlib.Path(local_file_path).read_text()
-        ctx = context.ContextSet.model_validate_json(text)
-        context_payload = ctx.model_dump_json(exclude_none=True)
-
-    client = context_set_mcp_client.ContextSetMcpClient()
-    res = client.upload_context_set(context_set, context_payload, description or "")
-    return json.dumps(res)
-
-
-@mcp.tool(
-    annotations={
-        "title": "Get Context Set",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": False,
-    }
-)
-def get_context_set(context_set: str) -> str:
-    """Gets a context set. Synchronous; no polling required.
-
-    Args:
-        context_set: Canonical resource name (format:
-            projects/{project}/locations/{location}/contextSets/{context_set}).
-
-    Returns:
-        JSON string of the form {"payload": "<ContextSet JSON string>"}. Parse
-        'payload' to obtain the ContextSet. A NOT_FOUND error means no context
-        set exists under that name.
-    """
-    client = context_set_mcp_client.ContextSetMcpClient()
-    res = client.get_context_set(context_set)
-    return json.dumps(res)
-
-
-@mcp.tool(
-    annotations={
-        "title": "Delete Context Set",
-        "readOnlyHint": False,
-        "destructiveHint": True,
-        "idempotentHint": True,
-        "openWorldHint": False,
-    }
-)
-def delete_context_set(context_set: str) -> str:
-    """Deletes a specific context set. This cannot be undone.
-
-    Use only for: (a) removing the '<context_set_id>_draft' working copy after
-    the best version has been published to the bare '<context_set_id>', or
-    (b) an explicit user request to clean up a named context set. Never call
-    this inside the hill-climbing loop — iterations overwrite the working copy
-    via upload_context_set instead. A NOT_FOUND error means the context set is
-    already gone and should be treated as success.
-
-    Deletion is asynchronous: this tool returns a Long-Running Operation, not a
-    finished result. To complete the deletion the agent MUST:
-      1. Capture the operation's 'name' from the response.
-      2. Poll get_operation with that name until the response has 'done': true.
-
-    Args:
-        context_set: Canonical resource name (format:
-            projects/{project}/locations/{location}/contextSets/{context_set}).
-
-    Returns:
-        JSON string containing the Long-Running Operation (includes 'name').
-    """
-    client = context_set_mcp_client.ContextSetMcpClient()
-    res = client.delete_context_set(context_set)
-    return json.dumps(res)
-
-
-@mcp.tool(
-    annotations={
-        "title": "List Context Set Locations",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": False,
-    }
-)
-def list_context_set_locations(project_id: str) -> str:
-    """Lists locations where context sets can live.
-
-    upload_context_set will fail if the request specifies a location that is
-    not in this list. Synchronous; no polling required.
-
-    Args:
-        project_id: Google Cloud project ID.
-
-    Returns:
-        JSON string listing supported location IDs (e.g. ["us-central1"]).
-    """
-    client = context_set_mcp_client.ContextSetMcpClient()
-    res = client.list_context_set_locations(project_id)
-    return json.dumps(res)
-
-
-@mcp.tool(
-    annotations={
-        "title": "Get Operation",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": False,
-    }
-)
-def get_operation(
-    project_id: str | None = None,
-    location: str | None = None,
-    operation_id: str | None = None,
-    operation_name: str | None = None,
-) -> str:
-    """Gets the current status of a Long-Running Operation returned by
-    upload_context_set or delete_context_set.
-
-    Call repeatedly until the response has 'done': true. Use a growing wait
-    between calls (1s, 2s, 4s, 8s, ...) and give up after about 5 minutes.
-    If 'done' is true and an 'error' field is present, the operation failed.
-
-    Identify the operation either by its full 'operation_name' (as returned
-    in the 'name' field of upload/delete) or by project_id + location +
-    operation_id.
-
-    Args:
-        project_id: Google Cloud project ID.
-        location: Location ID (e.g. us-central1).
-        operation_id: Operation ID, the last path segment of the operation name.
-        operation_name: Full operation name
-            (projects/{project}/locations/{location}/operations/{operation_id}).
-
-    Returns:
-        JSON string with the operation status, including 'done' and, when
-        finished, either a result or an 'error'.
-    """
-    if operation_name and (not project_id or not location or not operation_id):
-        parts = operation_name.split("/")
-        if (
-            len(parts) >= 6
-            and parts[0] == "projects"
-            and parts[2] == "locations"
-            and parts[4] == "operations"
-        ):
-            project_id = parts[1]
-            location = parts[3]
-            operation_id = parts[5]
-
-    if not project_id or not location or not operation_id:
-        return json.dumps({
-            "error": "Missing required arguments: provide project_id, location, and operation_id (or a valid operation_name)"
-        })
-
-    client = context_set_mcp_client.ContextSetMcpClient()
-    res = client.get_operation(project_id, location, operation_id)
-    return json.dumps(res)
 
 
 @mcp.tool

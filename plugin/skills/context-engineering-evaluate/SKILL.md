@@ -68,8 +68,8 @@ Ask only for what is missing:
      - Say plainly: *"This local file must be pushed to GCP to run evaluation. May I upload it?"* and name the target.
      - **Inside an experiment** the target is the working copy `projects/<project_id>/locations/<location>/contextSets/<context_set_id>_draft` from `context_store_coordinates`; if `auto_approve_uploads` is `true` the question above is informational and you proceed, otherwise wait for approval. Never upload to the bare id from evaluate.
      - **Standalone** collect `project_id`, `location` and a `context_set_id` individually (do not guess); call `list_context_set_locations(project_id)` and make sure `location` is in the list; show the exact resource name; warn that if a context set with this name already exists the upload **overwrites it** irrecoverably; proceed only on explicit consent.
-     - Run `validate_context_set` on the file first; then `upload_context_set(context_set=<resource>, local_file_path=<file>)`.
-     - Poll `get_operation` on the returned operation (1 s doubling backoff, 5-minute ceiling), logging each response, until `done: true` — see the Context Store (OneMCP) Protocol. **Do not call `generate_evalbench_configs` until `done: true` is observed**; evaluating before the upload has landed scores a missing or stale context set.
+     - Run `validate_context_set` on the file first; then read the file and call `upload_context_set(project_id=<project_id>, location=<location>, context_set_id=<context_set_id>, context_payload=<exact file contents>)` — the three identity parts come from the resource name above (`context_set_id` is its last path segment, `<context_set_id>_draft` inside an experiment). There is no file-path argument.
+     - Poll `get_operation(project_id, location, operation_id)` on the returned operation (≥5 s between polls, 5-minute ceiling), logging each response, until `done: true` — see the Context Store (OneMCP) Protocol in `context-engineering-workflow`. **Do not call `generate_evalbench_configs` until `done: true` is observed**; evaluating before the upload has landed scores a missing or stale context set.
      - On an operation that reports an `error`, surface it verbatim and stop.
 
 3. **Select the DB source.** Inside an experiment it is `db_source`. Standalone: find all `kind: source` blocks in `tools.yaml` whose `type` is a supported evaluation engine (consult `generate_evalbench_configs` for the current list); auto-select if exactly one, otherwise list `name` + `type` and let the user pick.
@@ -113,9 +113,9 @@ Ask only for what is missing:
 
 **MCP:**
 - `validate_context_set` — check a local file before uploading it.
-- `list_context_set_locations` — confirm the upload location; standalone local-file path only.
-- `upload_context_set` — used only when the caller supplies a local file instead of a resource name; returns an operation.
-- `get_operation` — poll the upload operation until `done: true` before evaluating.
+- `list_context_set_locations` (remote Context Store server) — confirm the upload location; standalone local-file path only.
+- `upload_context_set` (remote Context Store server) — used only when the caller supplies a local file instead of a resource name; takes the file contents inline in `context_payload`; returns an operation.
+- `get_operation` (remote Context Store server) — poll the upload operation until `done: true` before evaluating.
 - `generate_evalbench_configs` — produces Evalbench YAML configs on disk.
 - `read_evaluation_result` — parses `scores.csv` / `summary.csv` into a markdown summary.
 

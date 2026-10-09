@@ -26,7 +26,7 @@ Load `references/workspace.md` before any workspace interaction — it describes
 
 Local files are the source of truth. Every iteration's ContextSet lives at `vN/context_set_vN.json` on disk and stays there. The Context Store holds **one working copy** for the whole run: `<context_set_id>_draft`. Iteration `N` overwrites it with `vN/context_set_vN.json`, evaluates against it, and moves on — there is no per-iteration delete. Nothing is ever re-downloaded from the store mid-run. When a stopping condition fires, the best iteration's local file is uploaded under the bare `<context_set_id>` — that is the deliverable — and the working copy is deleted once.
 
-Every `upload_context_set` and `delete_context_set` below is followed by the poll gate: poll `get_operation` on the returned operation (1 s doubling backoff, 5-minute ceiling) until `done: true` before continuing. See the Context Store (OneMCP) Protocol.
+Every `upload_context_set` and `delete_context_set` below is followed by the poll gate: poll `get_operation(project_id, location, operation_id)` on the returned operation (≥5 s between polls, 5-minute ceiling) until `done: true` before continuing. `upload_context_set` takes the ContextSet **inline** in `context_payload` — read the local file and pass its exact contents; there is no file-path argument. Every store tool identifies the context set by `project_id`, `location`, and `context_set_id` (read `Project` and `Location` from `state.md`; the draft's `context_set_id` is `<context_set_id>_draft`). See the Context Store (OneMCP) Protocol in `context-engineering-workflow`.
 
 **Upload approval — two tiers.** `state.md` records `Auto-approve uploads` (asked once by init).
 - `true` → every `_draft` upload below proceeds without asking.
@@ -39,7 +39,7 @@ The publish to the bare id never asks: the overwrite was acknowledged in init (`
 3. **Fresh start — seed v0.** Produce `v0/context_set_v0.json` per the base-context case:
    - **None** → invoke `context-engineering-bootstrap` to generate the file at `v0/context_set_v0.json` (no upload from bootstrap; this loop handles uploads). Bootstrap reads enrichment sources and scope from `state.md`.
    - **Local file** → copy it to `v0/context_set_v0.json`.
-   - **Existing Context Store resource name** (`Seed resource` in `state.md`) → call `get_context_set` on it, parse `payload`, and write it to `v0/context_set_v0.json`. **This resource is user-owned: the loop never deletes or overwrites it.**
+   - **Existing Context Store resource name** (`Seed resource` in `state.md`) → split it into `project_id`, `location`, `context_set_id`, call `get_context_set(project_id, location, context_set_id)`, parse `payload`, and write it to `v0/context_set_v0.json`. **This resource is user-owned: the loop never deletes or overwrites it.**
 
    Then baseline-evaluate `v0`: upload `v0/context_set_v0.json` to `<context_set_id>_draft` (approval tier applies) → poll gate → evaluate into `v0/eval/` on the `Hillclimb dataset` from `state.md` (`.context-engineering/splits/hillclimb.json`) → record the baseline score. Write the `### v0` entry to `state.md`. Iteration loop starts at `v1`.
 
@@ -49,7 +49,7 @@ The publish to the bare id never asks: the overwrite was acknowledged in init (`
    - **Pagination**: The tool returns a batch of failure cases (default limit 10). If there are many failures, iterate by calling the tool with increasing `offset` (0, 10, 20...) until all failed queries are analyzed.
    - **Use `pipeline_debug_info`**: If a failure case's Additional Output contains it, use this generation trace (showing which context the API retrieved and used) to ground the root cause (e.g., distinguishing a missing template match vs. a bad column reference) rather than guessing.
 3. **Mutate**: plan mutations from the analysis (prefer fewer general items — a facet often beats many templates). Author new items via `context-engineering-generation-guide`. Validate generated SQL via `<source>-execute-sql` and column references via `<source>-list-schemas`. Apply via `mutate_context_set` to `context_set_vN.json`.
-4. **Upload the working copy** (approval tier applies): `upload_context_set(context_set=projects/<project_id>/locations/<location>/contextSets/<context_set_id>_draft, local_file_path=vN/context_set_vN.json)` → poll gate until `done: true`. This overwrites the previous iteration's copy. Record the operation name in `state.md`.
+4. **Upload the working copy** (approval tier applies): read `vN/context_set_vN.json` and call `upload_context_set(project_id=<Project>, location=<Location>, context_set_id=<context_set_id>_draft, context_payload=<exact file contents>)` → poll gate until `done: true`. This overwrites the previous iteration's copy. Record the operation name in `state.md`.
 5. **Evaluate**: invoke `context-engineering-evaluate` with `cs_resource_name=<the _draft resource>`, the `Hillclimb dataset` path from `state.md` (`.context-engineering/splits/hillclimb.json`), and `output_dir=<workspace>/vN/eval/`. Capture `job_id`, `passed`, `total` and overall score.
 6. **Update `state.md`**: replace the `## In-Progress: vN` marker with the final `### vN` entry (local file, eval report path, analysis path, score, upload operation name).
 7. **Check the stopping conditions** (see below). If none fired, continue to `v(N+1)`.
@@ -69,8 +69,8 @@ The user can also explicitly ask to stop at any time; the current iteration comp
 
 **Finalize** (runs after `## Converged`, or after `## User Stop` when the user asks to publish):
 1. Pick the best-scoring iteration `K` from the Iteration Log (ties → earliest).
-2. Append `## Finalizing: vK` to `state.md`, then `upload_context_set(context_set=<final resource>, local_file_path=vK/context_set_vK.json, description=<experiment + score>)` → poll gate until `done: true`. No confirmation is asked here — the overwrite was acknowledged once in init.
-3. `delete_context_set(<draft resource>)` → poll gate until `done: true`. NOT_FOUND counts as success (a resumed run may have already cleaned up).
+2. Append `## Finalizing: vK` to `state.md`, then read `vK/context_set_vK.json` and call `upload_context_set(project_id=<Project>, location=<Location>, context_set_id=<context_set_id>, context_payload=<exact file contents>, description=<experiment + score>)` → poll gate until `done: true`. No confirmation is asked here — the overwrite was acknowledged once in init.
+3. `delete_context_set(project_id=<Project>, location=<Location>, context_set_id=<context_set_id>_draft)` → poll gate until `done: true`. NOT_FOUND counts as success (a resumed run may have already cleaned up).
 4. Replace `## Finalizing` with `## Final: <final resource> (from vK, score <S>)` plus the two operation names in `state.md`.
 5. Print the publish confirmation (resource name, `vK`, score, local file), then **hand over to the Holdout Evaluation & Generalization Reporting Phase** in `context-engineering-workflow` — still in the same turn.
 
@@ -97,13 +97,15 @@ The user can also explicitly ask to stop at any time; the current iteration comp
 - `context-engineering-evaluate` — invoked once per iteration.
 - `context-engineering-generation-guide` — produces well-formed Template / Facet / Value Search JSON.
 
-**MCP:**
-- `upload_context_set` — overwrite `<context_set_id>_draft` every iteration and, at the end, publish the best iteration under the bare `<context_set_id>`; returns an operation.
+**MCP — Context Store (remote OneMCP server):**
+- `upload_context_set` — overwrite `<context_set_id>_draft` every iteration and, at the end, publish the best iteration under the bare `<context_set_id>`; takes the file contents inline in `context_payload`; returns an operation.
 - `delete_context_set` — remove `<context_set_id>_draft` once, after the publish succeeds; returns an operation.
-- `get_operation` — poll every upload/delete operation until `done: true`.
+- `get_operation` — poll every upload/delete operation (`project_id`, `location`, `operation_id`) until `done: true`.
 - `get_context_set` — seed `v0` from a user-supplied existing resource (entry flow only). Location and overwrite checks are done by `context-engineering-init`, not here.
+
+**MCP — local plugin and Toolbox:**
 - `mutate_context_set` — apply planned mutations.
-- `validate_context_set` — re-check `vN/context_set_vN.json` after a user edits it during the manual-approval pause (`Auto-approve uploads: false`).
+- `validate_context_set` — check `vN/context_set_vN.json` before every upload, and re-check after a user edits it during the manual-approval pause (`Auto-approve uploads: false`).
 - `read_evaluation_result` — read scored eval reports.
 - `<source>-list-schemas` (Toolbox) — validate that referenced columns exist.
 - `<source>-execute-sql` (Toolbox) — validate that generated SQL runs against the DB.

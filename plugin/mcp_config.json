@@ -14,6 +14,10 @@
         ".context-engineering/tools.yaml",
         "--stdio"
       ]
+    },
+    "contextmgmt": {
+      "url": "https://staging-dataplex.sandbox.googleapis.com/mcp/managed-context-sets",
+      "authProviderType": "google_credentials"
     }
   }
 }

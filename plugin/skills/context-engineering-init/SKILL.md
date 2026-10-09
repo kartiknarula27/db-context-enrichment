@@ -53,7 +53,7 @@ Run this when a user is starting a hill-climb experiment, or when a downstream s
 2. **Project** — the GCP project id (default: ADC's project).
 3. **Location** — call `list_context_set_locations(project_id)` and let the user pick from the returned list (if they named one, confirm it is in the list). Do not assume a default.
 4. **Context set id** — the name the **final** context set is published under. Default: the experiment name. Derive `Final resource` = `projects/<project>/locations/<location>/contextSets/<context_set_id>` and `Draft resource` = `…/contextSets/<context_set_id>_draft`.
-5. **Overwrite acknowledgement** — probe the bare id with `get_context_set(Final resource)`.
+5. **Overwrite acknowledgement** — probe the bare id with `get_context_set(project_id=<project>, location=<location>, context_set_id=<context_set_id>)`.
    - NOT_FOUND → nothing to overwrite; record `Overwrite acknowledged: yes`.
    - Exists → tell the user the exact resource name, explain that the hill-climb publish will **silently replace** its contents, and ask for an explicit yes. Record `Overwrite acknowledged: yes` only on an explicit yes; otherwise ask for a different `Context set id` and probe again.
 6. **Seed resource** (optional) — an existing Context Store resource name to start from. Record it as `Seed resource: <resource name>`; the loop reads it once and never deletes or overwrites it. Otherwise record `Seed resource: (none — seeded from bootstrap)` or `Seed resource: (local file: <path>)`.
@@ -91,7 +91,8 @@ Commands in parentheses are examples — the agent may use its own approach.
 (Example: check enablement via `gcloud services list --enabled --project=<project>`; enable via `gcloud services enable <api> --project=<project>`.)
 
 ### GCP IAM (operational probes)
-- **Context Store access** — required by every Context Store tool and by QueryData's context lookup. Probe by calling `get_context_set` on a well-formed resource name that is known not to exist, e.g. `projects/<project>/locations/us-central1/contextSets/preflight-probe-does-not-exist`. Interpret the outcome:
+- **Context Store server connected** — the five Context Store tools (`list_context_set_locations`, `upload_context_set`, `get_context_set`, `delete_context_set`, `get_operation`) are served by the **remote OneMCP Context Store server** registered in the plugin manifests under the key `contextmgmt` (Google-credentials auth). Check that all five appear in your tool list. If they do not, do not continue the preflight: tell the user the remote server is not connected and give the fix — ADC present with a quota project (checks above), then reload MCP servers in the client (Antigravity / Jetski: open the MCP panel; Gemini CLI: `/mcp refresh`). A `401`/`UNAUTHENTICATED` on the first call to any of these tools means the client could not mint an ADC token: re-run `gcloud auth application-default login`, then reload.
+- **Context Store access** — required by every Context Store tool and by QueryData's context lookup. Probe by calling `get_context_set(project_id=<project>, location=us-central1, context_set_id=preflight-probe-does-not-exist)` — a well-formed identity that is known not to exist. Interpret the outcome:
   - **NOT_FOUND** (or INVALID_ARGUMENT) → the request was authenticated and authorized and reached the API; the probe **passes**. This is the expected result.
   - **UNAUTHENTICATED** → ADC is missing or expired; point the user back to the GCP authentication checks above.
   - **PERMISSION_DENIED** → surface the error verbatim and ask the user to request the appropriate Context Store role from their IAM admin.
@@ -124,8 +125,8 @@ Commands in parentheses are examples — the agent may use its own approach.
 
 ## Gotchas
 - **Quota project vs ADC project:** ADC infers a default project from `gcloud config`, but Context Store requires an explicit quota project via `X-Goog-User-Project`. Missing quota project → 400 from Context Store API.
-- **Context Store uploads and deletes are asynchronous:** `upload_context_set` / `delete_context_set` return an operation, not a finished result. Downstream skills must poll `get_operation` until `done: true` (see the Context Store (OneMCP) Protocol in `context-engineering-workflow`). The preflight probe above uses `get_context_set`, which is synchronous, precisely so it needs no polling.
-- **Context Store endpoint is pinned in code:** the OneMCP endpoint the tools talk to is set in `context_set_mcp_client.py`, not in `tools.yaml`. A probe that fails with a connection or DNS error points at the endpoint, not at the user's configuration.
+- **Context Store uploads and deletes are asynchronous:** `upload_context_set` / `delete_context_set` return an operation, not a finished result. Downstream skills must poll `get_operation(project_id, location, operation_id)` until `done: true`, waiting ≥5 s between polls (see the Context Store (OneMCP) Protocol in `context-engineering-workflow`). The preflight probe above uses `get_context_set`, which is synchronous, precisely so it needs no polling.
+- **Context Store endpoint lives in the plugin manifests, not in `tools.yaml`:** the remote server URL is the `contextmgmt` entry in `plugin/mcp_config.json` / `gemini-extension.json`. A probe that fails with a connection or DNS error points at that URL or at the client's MCP configuration, not at the user's `tools.yaml`. The client mints the bearer token from ADC and sets `X-Goog-User-Project` from the ADC quota project, which is why the quota-project check above matters.
 - **MCP restart required for new tools.yaml sources:** Toolbox reads `tools.yaml` at MCP-server startup. Validation runs standalone, but agent visibility of new sources needs a restart.
 - **AlloyDB requires `cluster` + `instance`; Cloud SQL only `instance`.**
 - **Spanner uses ADC; verification fails without `gcloud auth application-default login`.**

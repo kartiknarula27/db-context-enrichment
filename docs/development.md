@@ -4,6 +4,65 @@ This project ships as a Gemini CLI extension, a Claude Code plugin,
 and an Antigravity CLI extension, all from a shared `plugin/` payload
 (skills/commands/`GEMINI.md`). Each client has its own local-dev flow.
 
+## MCP servers
+
+Every manifest declares three MCP servers:
+
+| Key | What | Transport |
+| :--- | :--- | :--- |
+| `db-context-engineering` (`mcp_db_context_engineering` in `plugin/gemini-extension.json`) | This repo's Python server (`main.py`): dataset generation/splitting, Evalbench config generation, `mutate_context_set`, `validate_context_set`, `read_evaluation_result`. | stdio (`uvx` / `uv run`) |
+| `toolbox` | MCP Toolbox for Databases, reading `.context-engineering/tools.yaml`. | stdio (`uvx`) |
+| `contextmgmt` | The **remote OneMCP Context Store server** (Dataplex): `list_context_set_locations`, `upload_context_set`, `get_context_set`, `delete_context_set`, `get_operation`. | Streamable HTTP, Google-credentials auth |
+
+### Context Store (`contextmgmt`)
+
+The Context Store tools are **not** implemented in this repo; the agent
+calls the remote server directly. The manifests point at the staging
+endpoint for now
+(`https://staging-dataplex.sandbox.googleapis.com/mcp/managed-context-sets`);
+flipping to prod is a one-line URL change in each manifest.
+
+Auth is `authProviderType: "google_credentials"`: the client mints a
+bearer token from Application Default Credentials (scope
+`cloud-platform`) and sets `X-Goog-User-Project` from the ADC quota
+project. Before launching an agent:
+
+```bash
+gcloud auth application-default login
+gcloud auth application-default set-quota-project <project>
+```
+
+Client support:
+
+- **Antigravity / Jetski** — `plugin/mcp_config.json` (`url` +
+  `authProviderType`). Supported natively.
+- **Gemini CLI** — `gemini-extension.json` / `plugin/gemini-extension.json`
+  (`httpUrl` + `authProviderType` + `oauth.scopes`). Supported natively.
+- **Claude Code** — `plugin/mcp.json` does **not** yet declare the
+  remote server (Claude needs an `http` entry with a `headersHelper`
+  that prints the ADC bearer token). Until that lands, the Context
+  Store tools are unavailable in Claude Code.
+
+### Antigravity tool-name length limit
+
+Antigravity (desktop and `agy`) exposes plugin MCP tools to the model as
+`mcp_<plugin-name>_<server-key>_<tool>` and rejects any name longer than
+**64 characters** (the tool is logged as `encountered invalid tool` and
+is not callable). The budget is therefore
+`64 − 4 − len(plugin) − len(server-key) − 2` characters for the tool
+name; the longest tools are `list_context_set_locations` and
+`generate_evalbench_configs` (26 each).
+
+- `dev-plugin/gemini-extension.json` uses the short plugin name
+  `dbce-dev` so every tool fits during local testing
+  (`mcp_dbce-dev_contextmgmt_list_context_set_locations` = 51,
+  `mcp_dbce-dev_db-context-engineering_generate_evalbench_configs` = 62).
+- The shipped Antigravity manifest (root `gemini-extension.json`, name
+  `google-cloud-db-context-engineering`) currently **overflows for most
+  tools** of all three servers. Shortening the shipped plugin name
+  and/or the `db-context-engineering` server key is tracked as a
+  follow-up; keep every new server key short.
+
 ## Gemini CLI extension
 
 ### Set up
@@ -16,7 +75,7 @@ Verify:
 
 ```bash
 gemini extensions list   # Type: link, Path: .../plugin
-gemini mcp list          # mcp_db_context_engineering ✓ Connected
+gemini mcp list          # mcp_db_context_engineering ✓ Connected, contextmgmt ✓ Connected
 ```
 
 Both `src/` and `plugin/` edits are picked up on the next `gemini`
@@ -84,9 +143,29 @@ step — `--plugin-dir` only affects the session it's passed to.
 
 ### Set up
 
-Edit `dev-plugin/gemini-extension.json` and replace the `<local-repo-path>`
-placeholder in `mcpServers.db-context-engineering.args` with the absolute
-path to this repo's root. Then install the dev extension:
+Edit `dev-plugin/mcp_config.json`:
+
+1. Replace `<local-repo-path>` in `mcpServers.db-context-engineering.args`
+   with the absolute path to this repo's root.
+2. Replace `<local-workspace-path>` in the `cwd` of **both** stdio servers
+   (`db-context-engineering` and `toolbox`) with the absolute path of the
+   directory you will launch `agy` in — the one that holds
+   `.context-engineering/tools.yaml`.
+
+> **Why `cwd` is required on Antigravity.** For plugin MCP servers,
+> Antigravity/Jetski resolves an empty `cwd` to the *plugin directory*
+> (`~/.gemini/config/plugins/<name>/`), not to the workspace. Toolbox then
+> looks for `.context-engineering/tools.yaml` inside the plugin directory
+> and fails with `no such file or directory`, and relative paths passed to
+> the local server's tools resolve there too. There is no
+> workspace-root variable for plugin manifests today (only `${PLUGIN_ROOT}`
+> and `${PLUGIN_DATA}`), so the dev manifest pins an absolute `cwd`. Gemini
+> CLI and Claude Code start plugin servers in the workspace, so their
+> manifests do not need this. The shipped Antigravity manifest has the
+> same gap — tracked as a follow-up.
+
+Make sure ADC is in place (see
+[Context Store](#context-store-contextmgmt)), then install the dev plugin:
 
 ```bash
 agy plugin install /absolute/path/to/db-context-enrichment/dev-plugin
@@ -95,35 +174,57 @@ agy plugin install /absolute/path/to/db-context-enrichment/dev-plugin
 Verify:
 
 ```bash
-agy plugin list
+agy plugin list                                   # dbce-dev
+cat ~/.gemini/config/plugins/dbce-dev/mcp_config.json   # must still contain "authProviderType"
 ```
 
-Both `src/` and `plugin/` edits are picked up on the next `agy` launch.
+Then launch `agy` in a workspace directory and open `/mcp`: the plugin
+should show three servers (`db-context-engineering`, `toolbox`,
+`contextmgmt`) and the model-facing tool names
+`mcp_dbce-dev_<server>_<tool>` must all be connected (none flagged
+invalid). A quick end-to-end check is asking the agent to call
+`list_context_set_locations` for a project you can access.
+
+`src/` and `plugin/skills/` edits are picked up on the next `agy`
+launch. **Manifest edits are not**: `agy plugin install` copies the
+directory, so re-run the install command after changing
+`dev-plugin/plugin.json` or `dev-plugin/mcp_config.json`.
 
 ### Revert
 
 ```bash
-agy plugin uninstall google-cloud-db-context-engineering-dev
+agy plugin uninstall dbce-dev
 ```
 
 ### Notes
 
-- `dev-plugin/gemini-extension.json` is a separate manifest from the
-  root `gemini-extension.json`. It runs the server via `uv run
-  --directory <local-repo-path>` instead of `uvx pkg@<version>`, so no
-  PyPI fetch and no version sync with `pyproject.toml` is required. It
-  uses `name: google-cloud-db-context-engineering-dev` so it can sit
-  side-by-side with a prod install without colliding.
-- The dev manifest takes a literal `<local-repo-path>` placeholder
-  rather than `${extensionPath}/..` so the working directory resolves
-  unambiguously regardless of how Antigravity launches the subprocess
-  — see the Q&A note in the commit history for the reasoning.
+- `dev-plugin/plugin.json` + `dev-plugin/mcp_config.json` are the
+  native Antigravity manifest pair and are what `agy plugin install`
+  reads when `plugin.json` is present. Do **not** rely on
+  `dev-plugin/gemini-extension.json` for agy: when a directory has only
+  a `gemini-extension.json`, agy runs its Gemini-extension importer,
+  which keeps `url` but **drops `authProviderType`**, so the remote
+  Context Store server would come up unauthenticated. The
+  `gemini-extension.json` is kept in sync for reference only.
+- The dev plugin is named `dbce-dev` (not
+  `google-cloud-db-context-engineering-dev`) because Antigravity rejects
+  model-facing tool names longer than 64 characters — see
+  [Antigravity tool-name length limit](#antigravity-tool-name-length-limit).
+  With the long name every tool of every server was invalid.
+- The dev manifest runs the server via `uv run --project
+  <local-repo-path>` instead of `uvx pkg@<version>`, so no PyPI fetch
+  and no version sync with `pyproject.toml` is required. It takes a
+  literal `<local-repo-path>` placeholder rather than
+  `${extensionPath}/..` so the working directory resolves unambiguously
+  regardless of how Antigravity launches the subprocess. Keep the
+  placeholder in the committed file; only your working copy carries
+  the absolute path.
 - `dev-plugin/skills` is a symlink to `plugin/skills/`, and the root
   `skills` symlink also targets `plugin/skills/`, so all three variants
   (Gemini CLI, Claude Code, Antigravity) share skill files. The
   manifests themselves are hand-maintained — when changing the prod
   root manifest, mirror any structural change (e.g. adding an MCP
-  server entry) into the dev manifest.
+  server entry) into `dev-plugin/mcp_config.json`.
 - See [releasing.md](releasing.md) for the version-pin atomicity that
   the dev flow sidesteps; the agy root manifest shares the same
   `uvx pkg@<version>` invariant as the Claude Code plugin manifest.

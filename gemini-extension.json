@@ -17,6 +17,13 @@
         ".context-engineering/tools.yaml",
         "--stdio"
       ]
+    },
+    "contextmgmt": {
+      "httpUrl": "https://staging-dataplex.sandbox.googleapis.com/mcp/managed-context-sets",
+      "authProviderType": "google_credentials",
+      "oauth": {
+        "scopes": ["https://www.googleapis.com/auth/cloud-platform"]
+      }
     }
   }
 }

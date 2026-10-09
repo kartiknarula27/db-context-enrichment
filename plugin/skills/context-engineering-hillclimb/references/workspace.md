@@ -131,7 +131,7 @@ On skill invocation with an existing workspace:
 2. Determine the last completed iteration `N`.
 3. **Check for `## In-Progress: vM`.** If present, the prior run crashed mid-iteration `M`:
    1. Delete the partial `vM/` directory (its files are not trustworthy) and remove the marker.
-   2. The working copy may hold a half-finished `vM`: re-upload `v(M-1)/context_set_v(M-1).json` to `<context_set_id>_draft` and poll `get_operation` until `done: true`.
+   2. The working copy may hold a half-finished `vM`: re-upload `v(M-1)/context_set_v(M-1).json` to `<context_set_id>_draft` (read the file, pass its exact contents as `context_payload`) and poll `get_operation` until `done: true`.
    3. Re-run iteration `M` from step 1, seeding from `v(M-1)/context_set_v(M-1).json` on disk.
 4. **Check for `## Finalizing: vK`.** If present, finalize was interrupted. Re-run the Finalize step from `vK/context_set_vK.json` (the re-upload is unconditional — do not try to infer what the server holds) and poll until `done: true`. No re-confirmation is needed: the overwrite was acknowledged in init.
 5. If `## Final:` is present without `## Generalizability`, run the **Holdout Evaluation & Generalization Reporting Phase** (workflow skill) against the final resource, then stop.

@@ -44,8 +44,9 @@ From a target database and optional user-supplied enrichment sources (design doc
 
 8. **Optionally upload:** if the user opted to upload:
    - Build `context_set = projects/<project_id>/locations/<location>/contextSets/<context_set_id>` and show it to the user. Remind them that if a context set with this name already exists, the upload **overwrites it** and the previous contents cannot be recovered; proceed only on explicit confirmation.
-   - Call `upload_context_set(context_set=<context_set>, local_file_path=<output path>, description=<short description>)`.
-   - Poll `get_operation` on the returned operation (1 s doubling backoff, 5-minute ceiling) until `done: true` before continuing — see the Context Store (OneMCP) Protocol. On `done: true` the upload is complete; on an `error` field, surface it verbatim and stop.
+   - Run `validate_context_set` on the output file; do not upload if it fails.
+   - Read the output file and call `upload_context_set(project_id=<project_id>, location=<location>, context_set_id=<context_set_id>, context_payload=<exact file contents>, description=<short description>)`. There is no file-path argument.
+   - Poll `get_operation(project_id, location, operation_id)` on the returned operation (≥5 s between polls, 5-minute ceiling) until `done: true` before continuing — see the Context Store (OneMCP) Protocol in `context-engineering-workflow`. On `done: true` the upload is complete; on an `error` field, surface it verbatim and stop.
 
 9. **Summarize:** report the local file path and (if uploaded) the resource name and the operation name that completed.
 
@@ -60,9 +61,10 @@ From a target database and optional user-supplied enrichment sources (design doc
 **MCP:**
 - `<source>-list-schemas` (Toolbox) — schema introspection.
 - `mutate_context_set` — incremental writes to the output JSON.
-- `list_context_set_locations` — confirm the upload location before uploading.
-- `upload_context_set` — optional Context Store upload; returns an operation.
-- `get_operation` — poll the upload operation until `done: true`.
+- `list_context_set_locations` (remote Context Store server) — confirm the upload location before uploading.
+- `upload_context_set` (remote Context Store server) — optional Context Store upload; takes the file contents inline in `context_payload`; returns an operation.
+- `get_operation` (remote Context Store server) — poll the upload operation until `done: true`.
+- `validate_context_set` — check the output file before uploading.
 
 **Sibling skill:**
 - `context-engineering-generation-guide` — produces well-formed Template / Facet / Value Search JSON. Also the reference for context-item schema and authoring standards.

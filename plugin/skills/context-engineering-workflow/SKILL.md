@@ -67,34 +67,49 @@ Experienced users can skip this section and invoke any peer directly.
 
 All peer skills that touch the Context Store (`bootstrap`, `evaluate`, `hillclimb`, and the `init` preflight) follow these rules. They are stated once here; peers reference them and repeat only the poll gate inline at each call site.
 
+### Connection
+
+The Context Store tools are served **directly by the remote OneMCP Context Store server** (a Dataplex MCP endpoint), not by this plugin's local MCP server. The plugin manifests register that remote server under the key `contextmgmt` with Google-credentials auth; the agent client (Antigravity / Jetski / Gemini CLI) attaches an Application Default Credentials bearer token automatically. If the five tools below are not visible in your tool list, the remote server is not connected: route to [context-engineering-init](../context-engineering-init/SKILL.md), which checks the connection and explains the fix (`gcloud auth application-default login` with a quota project, then reload MCP servers). Never substitute local HTTP calls (`curl`, `requests`) for these tools.
+
 ### Tools
+
+Every tool identifies a context set by three separate arguments — `project_id`, `location`, `context_set_id` — never by a single resource-name string.
 
 | Tool | Purpose | Returns |
 | :--- | :--- | :--- |
-| `list_context_set_locations(project_id)` | Discover which locations accept context sets. | List of location IDs. |
-| `upload_context_set(context_set, local_file_path \| context_payload, description?)` | Create **or overwrite** a context set from a local file or inline JSON. | A long-running operation (`name`). |
-| `get_context_set(context_set)` | Read a context set. | `{"payload": "<ContextSet JSON string>"}`. |
-| `delete_context_set(context_set)` | Delete a context set. | A long-running operation (`name`). |
-| `get_operation(operation_name)` (or `project_id` + `location` + `operation_id`) | Poll a long-running operation. | `{"done": bool, ...}` plus `error` on failure. |
+| `list_context_set_locations(project_id)` | Discover which locations accept context sets. | `{"locations": [...]}`. |
+| `upload_context_set(project_id, location, context_set_id, context_payload, description?, databases?)` | Create **or overwrite** a context set from an inline JSON string. There is **no file-path argument**; see *Writing a context set from disk*. | A long-running operation (`name`). |
+| `get_context_set(project_id, location, context_set_id)` | Read a context set. | `{"payload": "<ContextSet JSON string>", "description", "display_name", "databases"}`. |
+| `delete_context_set(project_id, location, context_set_id)` | Delete a context set. | A long-running operation (`name`). |
+| `get_operation(project_id, location, operation_id)` | Poll a long-running operation. | `{"done": bool, ...}` plus `error` on failure. |
 
 ### Resource naming
 
-A context set is addressed as `projects/<project_id>/locations/<location>/contextSets/<context_set_id>`.
+A context set is displayed as `projects/<project_id>/locations/<location>/contextSets/<context_set_id>`. `state.md` records `Final resource` and `Draft resource` in this form for readability; **when calling a tool, split the name into its three parts** — `project_id`, `location`, and the last path segment as `context_set_id`.
 
 *   `<context_set_id>` is user-chosen. `context-engineering-init` asks for it once (default: the experiment name) and records it in `state.md`; peers read it from there.
-*   Hill-climbing works on a **single** transient working copy named `<context_set_id>_draft`. Every iteration overwrites it; it is deleted once, after the final publish. The final deliverable is uploaded under the bare `<context_set_id>`.
+*   Hill-climbing works on a **single** transient working copy whose `context_set_id` is `<context_set_id>_draft`. Every iteration overwrites it; it is deleted once, after the final publish. The final deliverable is uploaded under the bare `<context_set_id>`.
 
 ### Location resolution
 
 Location is resolved **once**, by `context-engineering-init`: it calls `list_context_set_locations(project_id)`, lets the user pick (or confirms a named location is in the list), and records the choice in the experiment `state.md`. Peers read `Location` from `state.md` and do not call `list_context_set_locations` again. Do not assume a default location.
 
+### Writing a context set from disk
+
+`upload_context_set` accepts the ContextSet only as an inline JSON string in `context_payload`. To upload a file:
+
+1.  Run `validate_context_set` (local plugin tool) on the file. Do not upload a file that fails validation.
+2.  Read the file with ordinary file tooling.
+3.  Call `upload_context_set` with `context_payload` set to the **exact, complete** file contents. Do not summarise, reformat, truncate, or "fix" the JSON on the way through; the payload must round-trip byte-for-byte in meaning.
+4.  Follow the poll gate below.
+
 ### Long-running operations — the poll gate
 
 `upload_context_set` and `delete_context_set` are **asynchronous**: the tool returns as soon as the request is accepted, not when the work is done. After either call:
 
-1.  Take `name` from the response.
-2.  Call `get_operation(operation_name=<name>)`.
-3.  If `done` is not `true`, wait and call again. Start with a 1 s wait and double it each time (1 s, 2 s, 4 s, 8 s, …). Stop after 5 minutes total.
+1.  Take `name` from the response. It has the form `projects/<project_id>/locations/<location>/operations/<operation_id>`; the `operation_id` is the last path segment.
+2.  Call `get_operation(project_id=…, location=…, operation_id=…)` with those three parts.
+3.  If `done` is not `true`, wait **at least 5 seconds** and call again (the server asks for ≥5 s between polls). Stop after 5 minutes total.
 4.  Log every poll response so the user can see progress.
 5.  **`done: true` means the operation is complete.** Continue with the next step. No additional verification call is needed.
 6.  `done: true` together with an `error` field means the operation failed. Surface the error verbatim and stop.
