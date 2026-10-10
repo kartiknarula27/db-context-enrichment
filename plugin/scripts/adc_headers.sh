@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prints the HTTP headers (as a JSON object) that the remote Context Store
+# Prints the HTTP headers (as a JSON object) that the remote Context Set server
 # MCP server needs, derived from Application Default Credentials.
 #
 # Used as Claude Code's `headersHelper` for the `contextmgmt` server
@@ -18,7 +18,7 @@ token="$(gcloud auth application-default print-access-token 2>/dev/null)" || {
   exit 1
 }
 
-# X-Goog-User-Project (Context Store returns 400 without it). Resolution order:
+# X-Goog-User-Project (the Context Set server returns 400 without it). Resolution order:
 #   1. GOOGLE_CLOUD_QUOTA_PROJECT   explicit override
 #   2. quota_project_id in the ADC file   (set by: gcloud auth application-default set-quota-project <p>)
 #   3. GOOGLE_CLOUD_PROJECT         common convention, usually the same project

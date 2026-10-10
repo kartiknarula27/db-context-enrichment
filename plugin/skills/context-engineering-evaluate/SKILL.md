@@ -3,7 +3,7 @@ name: context-engineering-evaluate
 description: Guides the agent to execute an evaluation of a ContextSet against a golden NLQ+SQL dataset using the Evalbench framework, either standalone or as one iteration of the hill-climbing loop.
 ---
 
-> **Load [`context-engineering-workflow`](../context-engineering-workflow/SKILL.md) first** for shared terminology, the Context Store (OneMCP) Protocol, and safety protocol.
+> **Load [`context-engineering-workflow`](../context-engineering-workflow/SKILL.md) first** for shared terminology, the Context Set (OneMCP) Protocol, and safety protocol.
 
 # Skill: Evaluation Scoring
 
@@ -54,8 +54,8 @@ Ask only for what is missing:
   ]
   ```
 - A ContextSet, supplied as **exactly one of**:
-  - **A full Context Store resource name** (`projects/<project_id>/locations/<location>/contextSets/<context_set_id>`). Used directly.
-  - **A local ContextSet JSON file.** QueryData can only use a context set that is in the Context Store, so the file must be uploaded first — see step 2.
+  - **A full Context Set resource name** (shape per the **Resource naming rule** in `context-engineering-workflow`). Used directly.
+  - **A local ContextSet JSON file.** QueryData can only use a context set that exists on the Context Set server, so the file must be uploaded first — see step 2.
 - An `output_dir` (absolute or workspace-relative) where the eval configs and reports should live. If the user hasn't specified one, suggest `./eval-runs/<name>/`.
 
 ## Guidance
@@ -63,13 +63,13 @@ Ask only for what is missing:
 1. **Collect inputs** per the applicable Prerequisites table. Trust `tools.yaml` values as-is — don't ask the user to re-verify them.
 
 2. **Prepare the ContextSet resource name.**
-   - A resource name is used directly.
+   - A resource name is used directly: parse it per the Resource naming rule (`project_id` after `projects`, `location` after `locations`, `context_set_id` = last segment; **accept any collection segment** — `contextSets`, `entryGroups`, …), optionally confirm it exists with `get_context_set(project_id, location, context_set_id)`, and pass the **unchanged string** to `generate_evalbench_configs(context_set_id=…)` in step 4.
    - For a **local file**:
      - Say plainly: *"This local file must be pushed to GCP to run evaluation. May I upload it?"* and name the target.
-     - **Inside an experiment** the target is the working copy `projects/<project_id>/locations/<location>/contextSets/<context_set_id>_draft` from `context_store_coordinates`; if `auto_approve_uploads` is `true` the question above is informational and you proceed, otherwise wait for approval. Never upload to the bare id from evaluate.
+     - **Inside an experiment** the target is the **working copy** per `state.md`: the bare `<context_set_id>` (`Final resource`) when `Draft resource` is `(none …)` — a fresh context set — otherwise the `Draft resource` (`<context_set_id>_draft`). If `Auto-approve uploads` is `true` the question above is informational and you proceed, otherwise wait for approval. Never write to an *existing* context set's bare id from evaluate — that only happens in hillclimb's Finalize HITL.
      - **Standalone** collect `project_id`, `location` and a `context_set_id` individually (do not guess); call `list_context_set_locations(project_id)` and make sure `location` is in the list; show the exact resource name; warn that if a context set with this name already exists the upload **overwrites it** irrecoverably; proceed only on explicit consent.
-     - Run `validate_context_set` on the file first; then read the file and call `upload_context_set(project_id=<project_id>, location=<location>, context_set_id=<context_set_id>, context_payload=<exact file contents>)` — the three identity parts come from the resource name above (`context_set_id` is its last path segment, `<context_set_id>_draft` inside an experiment). There is no file-path argument.
-     - Poll `get_operation(project_id, location, operation_id)` on the returned operation (≥5 s between polls, 5-minute ceiling), logging each response, until `done: true` — see the Context Store (OneMCP) Protocol in `context-engineering-workflow`. **Do not call `generate_evalbench_configs` until `done: true` is observed**; evaluating before the upload has landed scores a missing or stale context set.
+     - Run `validate_context_set` on the file first; then read the file and call `upload_context_set(project_id=<project_id>, location=<location>, context_set_id=<context_set_id>, context_payload=<exact file contents>)` — the three identity parts come from the resource name above (`context_set_id` is its last path segment; inside an experiment, the working copy's id). There is no file-path argument.
+     - Poll `get_operation(project_id, location, operation_id)` on the returned operation (≥5 s between polls, 5-minute ceiling), logging each response, until `done: true` — see the Context Set (OneMCP) Protocol in `context-engineering-workflow`. **Do not call `generate_evalbench_configs` until `done: true` is observed**; evaluating before the upload has landed scores a missing or stale context set.
      - On an operation that reports an `error`, surface it verbatim and stop.
 
 3. **Select the DB source.** Inside an experiment it is the **Source Name** under `## Active Database` in `state.md` (confirm it still exists in the shared `.context-engineering/tools.yaml`; if not, stop and ask the user to restore it or re-run `context-engineering-init`). Standalone: find all `kind: source` blocks in `.context-engineering/tools.yaml` whose `type` is a supported evaluation engine (consult `generate_evalbench_configs` for the current list); auto-select if exactly one, otherwise list `name` + `type` and let the user pick.
@@ -102,20 +102,20 @@ Ask only for what is missing:
 
 - Never write `state.json`. Return results; the caller records them.
 - Never evaluate a context set whose upload operation has not reported `done: true`.
-- Never upload to the bare `<context_set_id>` of an experiment; evaluate's only upload target inside an experiment is `_draft`.
-- Never pick the holdout split on your own initiative; it is used once, by the holdout step, after publish.
+- Inside an experiment, evaluate's only upload target is the working copy recorded in `state.md`; never write to an existing context set's bare id.
+- Never pick the holdout split on your own initiative; it is used once, by the holdout step, after the hill-climb loop has converged.
 - Never invoke bootstrap or hillclimb from within this skill.
 - If both a resource name and a local file are provided, ask the user which to use — do not silently pick.
 - On `generate_evalbench_configs` errors, surface the error and stop; do not retry blindly.
-- Standalone, use the caller's Context Store coordinates verbatim; if any are missing, ask explicitly — do not infer from filenames, paths, or `tools.yaml` without confirmation.
+- Standalone, use the caller's Context Set coordinates verbatim; if any are missing, ask explicitly — do not infer from filenames, paths, or `tools.yaml` without confirmation.
 
 ## Tools
 
 **MCP:**
 - `validate_context_set` — check a local file before uploading it.
-- `list_context_set_locations` (remote Context Store server) — confirm the upload location; standalone local-file path only.
-- `upload_context_set` (remote Context Store server) — used only when the caller supplies a local file instead of a resource name; takes the file contents inline in `context_payload`; returns an operation.
-- `get_operation` (remote Context Store server) — poll the upload operation until `done: true` before evaluating.
+- `list_context_set_locations` (remote Context Set server) — confirm the upload location; standalone local-file path only.
+- `upload_context_set` (remote Context Set server) — used only when the caller supplies a local file instead of a resource name; takes the file contents inline in `context_payload`; returns an operation.
+- `get_operation` (remote Context Set server) — poll the upload operation until `done: true` before evaluating.
 - `generate_evalbench_configs` — produces Evalbench YAML configs on disk.
 - `read_evaluation_result` — parses `scores.csv` / `summary.csv` into a markdown summary.
 

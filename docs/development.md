@@ -12,11 +12,11 @@ Every manifest declares three MCP servers:
 | :--- | :--- | :--- |
 | `db-context-engineering` (`mcp_db_context_engineering` in `plugin/gemini-extension.json`) | This repo's Python server (`main.py`): dataset generation/splitting, Evalbench config generation, `mutate_context_set`, `validate_context_set`, `read_evaluation_result`. | stdio (`uvx` / `uv run`) |
 | `toolbox` | MCP Toolbox for Databases. Reads the single shared `.context-engineering/tools.yaml` (one file for all experiments; it may hold several sources — each experiment records the source/tools it uses in its `state.md`). The client starts Toolbox with a fixed `--config`, so **any edit to `tools.yaml` requires restarting the `toolbox` MCP server** (or the client) before the new sources/tools are visible. | stdio (`uvx`) |
-| `contextmgmt` | The **remote OneMCP Context Store server** (Dataplex): `list_context_set_locations`, `upload_context_set`, `get_context_set`, `delete_context_set`, `get_operation`. | Streamable HTTP, Google-credentials auth |
+| `contextmgmt` | The **remote OneMCP Context Set server** (Dataplex): `list_context_set_locations`, `upload_context_set`, `get_context_set`, `delete_context_set`, `get_operation`. | Streamable HTTP, Google-credentials auth |
 
-### Context Store (`contextmgmt`)
+### Context Set server (`contextmgmt`)
 
-The Context Store tools are **not** implemented in this repo; the agent
+The Context Set tools are **not** implemented in this repo; the agent
 calls the remote server directly. The manifests point at **prod**
 (`https://dataplex.googleapis.com/mcp/managed-context-sets`).
 
@@ -169,7 +169,7 @@ Edit `dev-plugin/mcp_config.json`:
 > same gap — tracked as a follow-up.
 
 Make sure ADC is in place (see
-[Context Store](#context-store-contextmgmt)), then install the dev plugin:
+[Context Set server](#context-set-server-contextmgmt)), then install the dev plugin:
 
 ```bash
 agy plugin install /absolute/path/to/db-context-enrichment/dev-plugin
@@ -208,7 +208,7 @@ agy plugin uninstall dbce-dev
   `dev-plugin/gemini-extension.json` for agy: when a directory has only
   a `gemini-extension.json`, agy runs its Gemini-extension importer,
   which keeps `url` but **drops `authProviderType`**, so the remote
-  Context Store server would come up unauthenticated. The
+  Context Set server would come up unauthenticated. The
   `gemini-extension.json` is kept in sync for reference only.
 - The dev plugin is named `dbce-dev` (not
   `google-cloud-db-context-engineering-dev`) because Antigravity rejects
