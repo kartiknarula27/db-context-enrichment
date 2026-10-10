@@ -18,17 +18,17 @@ Score a ContextSet against a dataset by running Evalbench, and return a scored r
 
 ### Inside an experiment (called by hillclimb or the holdout step, or by the user on an existing experiment)
 
-Read `.context-engineering/experiments/<experiment_name>/state.json` and take:
+Read `.context-engineering/experiments/<experiment_name>/state.md` and take:
 
 | Input | From |
 | :--- | :--- |
-| Toolbox source | `db_source` (and `.context-engineering/tools.yaml` must contain it). |
-| Dataset | `dataset_paths.hillclimb` by default; `dataset_paths.holdout` **only** when the caller is the holdout step; `dataset_paths.golden` only if the user explicitly asks for a full-set score. Never offer the holdout split as a casual choice — it must stay unseen during optimization. |
+| Toolbox source | `## Active Database` → **Source Name** (must exist in the shared `.context-engineering/tools.yaml`, which is the `toolbox_config_path` passed to `generate_evalbench_configs`). If its `<source>-*` tools are not visible, the `toolbox` MCP server is stale — tell the user to restart it (see `context-engineering-init`). |
+| Dataset | `Hillclimb dataset` by default; `Holdout dataset` **only** when the caller is the holdout step; `Golden dataset` only if the user explicitly asks for a full-set score. All three live under `<experiment>/dataset/`. Never offer the holdout split as a casual choice — it must stay unseen during optimization. |
 | ContextSet resource | The caller names it: the `_draft` working copy during the loop, the bare `<context_set_id>` for the holdout step, or a resource the user names. |
-| `output_dir` | Supplied by the caller: `hillclimb/vN/eval/` during the loop, `hillclimb/v<best>/holdout_eval/` for the holdout step. |
-| GCP project | `context_store_coordinates.project_id`. |
+| `output_dir` | Supplied by the caller: `<experiment>/vN/eval/` during the loop, `<experiment>/holdout_eval/` for the holdout step. |
+| GCP project / location | `Project` / `Location` in `## Metadata`. |
 
-If there is no `state.json` for the experiment the user is talking about, route to [context-engineering-init](../context-engineering-init/SKILL.md) rather than collecting the values inline.
+If there is no `state.md` for the experiment the user is talking about, route to [context-engineering-init](../context-engineering-init/SKILL.md) rather than collecting the values inline. If `state.md` contains `## Generalizability`, the experiment is finished: evaluating its published resource read-only is fine, but never upload into it.
 
 ### Standalone (no experiment)
 
@@ -72,9 +72,9 @@ Ask only for what is missing:
      - Poll `get_operation(project_id, location, operation_id)` on the returned operation (≥5 s between polls, 5-minute ceiling), logging each response, until `done: true` — see the Context Store (OneMCP) Protocol in `context-engineering-workflow`. **Do not call `generate_evalbench_configs` until `done: true` is observed**; evaluating before the upload has landed scores a missing or stale context set.
      - On an operation that reports an `error`, surface it verbatim and stop.
 
-3. **Select the DB source.** Inside an experiment it is `db_source`. Standalone: find all `kind: source` blocks in `tools.yaml` whose `type` is a supported evaluation engine (consult `generate_evalbench_configs` for the current list); auto-select if exactly one, otherwise list `name` + `type` and let the user pick.
+3. **Select the DB source.** Inside an experiment it is the **Source Name** under `## Active Database` in `state.md` (confirm it still exists in the shared `.context-engineering/tools.yaml`; if not, stop and ask the user to restore it or re-run `context-engineering-init`). Standalone: find all `kind: source` blocks in `.context-engineering/tools.yaml` whose `type` is a supported evaluation engine (consult `generate_evalbench_configs` for the current list); auto-select if exactly one, otherwise list `name` + `type` and let the user pick.
 
-4. **Generate the Evalbench configs.** Call `generate_evalbench_configs(output_dir, dataset_path, context_set_id=<resource>, toolbox_config_path=".context-engineering/tools.yaml", toolbox_source_name=<db_source>)`. The tool writes configs under `<output_dir>/eval_configs/`. This is the only supported way to produce Evalbench configs — never author them by hand.
+4. **Generate the Evalbench configs.** Call `generate_evalbench_configs(output_dir, dataset_path, context_set_id=<resource>, toolbox_config_path=.context-engineering/tools.yaml, toolbox_source_name=<source>)`. The tool writes configs under `<output_dir>/eval_configs/`. This is the only supported way to produce Evalbench configs — never author them by hand.
 
 5. **Run Evalbench.**
    - **Environment variables**: ensure the required GCP environment variables are exported:

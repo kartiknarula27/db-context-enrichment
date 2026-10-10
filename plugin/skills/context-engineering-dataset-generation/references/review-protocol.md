@@ -8,7 +8,7 @@ This protocol dictates the strict evaluation standards, file persistence managem
 ---
 
 ## Goal & File Management
-You must generate and maintain two final markdown reports (`evalset_report_pair_level.md` and `evalset_report_dataset_level.md`). Inside a context-engineering workspace both live in **`.context-engineering/dataset/`** (DB level, next to `tools.yaml` — not the current working directory, not `experiments/<experiment_name>/`); outside a workspace, the current working directory. Pay strict attention to file persistence: 
+You must generate and maintain two final markdown reports (`evalset_report_pair_level.md` and `evalset_report_dataset_level.md`). Inside a context-engineering workspace both live in **`<dataset_dir>` = `.context-engineering/experiments/<experiment_name>/dataset/`** (never the current working directory, never the experiment root); outside a workspace, the current working directory. Pay strict attention to file persistence: 
 * **If file already exists:** Read the existing files and intelligently append or update the metrics without destroying historical data or user-approved notes.
 * **If file does not exist:** Create the files.
 

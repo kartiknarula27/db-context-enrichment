@@ -29,7 +29,7 @@ From a target database and optional user-supplied enrichment sources (design doc
 2. **Collect enrichment sources:** prompt for design docs, ORM models, sample SQL, glossary, etc. Wait for the user's response before proceeding.
 
 3. **Deduce Key Info (Core Execution):**
-   - **Targeted Schema & Graph Retrieval**: Informed by the ingested application artifacts and design docs, use the available Toolbox MCP tools configured in the active `.context-engineering/tools.yaml` (e.g., `<source>-list-schemas`, `<source>-list-graphs`) to fetch the schemas for the target database and relevant tables/graphs.
+   - **Targeted Schema & Graph Retrieval**: Informed by the ingested application artifacts and design docs, use the available Toolbox MCP tools (e.g., `<source>-list-schemas`, `<source>-list-graphs`) to fetch the schemas for the target database and relevant tables/graphs. The sources come from the shared `.context-engineering/tools.yaml`; inside an experiment, use the **Source Name** (and its listed **Tools**) recorded under `## Active Database` in the experiment's `state.md` rather than picking a source ad hoc.
    - Present the retrieved schema summary **structurally and cleanly** to the user. Ask the user if they want to filter or focus on specific schemas, tables, or graphs.
    - Perform a **deep analysis** of the retrieved **schema and any provided documentation or code** to identify important concepts, relationships, and likely query patterns.
    - **GQL Preference for Graph Entities**: When querying entities or relationships that are modeled within a property graph, **always prefer GQL (`GRAPH <graph_name> MATCH ...`)** over writing relational SQL `JOIN` queries against the underlying node/edge tables.

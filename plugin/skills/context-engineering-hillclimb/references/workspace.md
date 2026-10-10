@@ -1,33 +1,33 @@
 # Hill-Climbing Workspace Layout
 
-The hill-climbing skill maintains an internal workspace to track iterations, evaluation reports, and mutation history. Two roots matter:
+The hill-climbing skill maintains an internal workspace to track iterations, evaluation reports, and mutation history. Everything for one run lives under a single root:
 
-- `<ce_root>` = `.context-engineering/` — **DB-level**, shared by every experiment on the same connection. Holds `tools.yaml`, the golden dataset and its splits.
-- `<workspace_root>` = `.context-engineering/experiments/<experiment_name>/` — **per experiment**. Unless stated otherwise, paths below are relative to `<workspace_root>`.
+- `.context-engineering/tools.yaml` — the **single shared** Toolbox configuration for the workspace (user-owned; may hold several DB sources). The Toolbox MCP server reads it at startup only, so any edit — by a skill or by the user — needs a `toolbox` server restart.
+- `<workspace_root>` = `.context-engineering/experiments/<experiment_name>/` — **per experiment**: `state.md`, `dataset/`, iterations and reports. `state.md`'s `## Active Database` records which `tools.yaml` source (and tools) this experiment uses. Unless stated otherwise, paths below are relative to `<workspace_root>`.
 
 ## Directory structure
 
 ```
-.context-engineering/                  # <ce_root> — one per DB connection
-├── tools.yaml                         # DB connection (context-engineering-init)
-├── dataset/                           # working files of context-engineering-dataset-generation
-│   ├── evalset_environment_inputs.md  # domain map, artifact registry, seed pairs
-│   ├── evalset_gen_plan.md            # user-approved generation plan
-│   ├── temp_golden.json               # interim dataset during generation/expansion
-│   ├── evalset_report_pair_level.md   # audit report 1
-│   └── evalset_report_dataset_level.md  # audit report 2
-├── golden.json                        # full golden dataset (context-engineering-dataset-generation)
-├── splits/
-│   ├── hillclimb.json                 # optimization split — the only dataset the loop evaluates on
-│   └── holdout.json                   # held out until after publish; never read by the loop
+.context-engineering/
+├── tools.yaml                             # shared Toolbox DB connections (context-engineering-init / user)
 └── experiments/
-    └── <experiment_name>/             # <workspace_root> — one per experiment
-        ├── state.md                   # written by init; metadata + per-iteration scores + notes
-        ├── v<N>/                      # one directory per iteration (v0 = base, v1+ = mutations)
-        │   ├── context_set_v<N>.json  # ContextSet snapshot at this version
-        │   ├── analysis_v<N>.md       # findings + reasoning + mutations applied
-        │   └── eval/                  # output_dir for context-engineering-evaluate
-        │       ├── eval_configs/      # generated Evalbench YAMLs + converted dataset
+    └── <experiment_name>/                 # <workspace_root> — one per experiment
+        ├── state.md                       # written by init; metadata + which tools.yaml source is used + per-iteration scores
+        ├── dataset/                       # context-engineering-dataset-generation (deliverables + working files)
+        │   ├── golden.json                # full golden dataset
+        │   ├── splits/
+        │   │   ├── hillclimb.json         # optimization split — the only dataset the loop evaluates on
+        │   │   └── holdout.json           # held out until after publish; never read by the loop
+        │   ├── evalset_environment_inputs.md  # domain map, artifact registry, seed pairs
+        │   ├── evalset_gen_plan.md        # user-approved generation plan
+        │   ├── temp_golden.json           # interim dataset during generation/expansion
+        │   ├── evalset_report_pair_level.md     # audit report 1
+        │   └── evalset_report_dataset_level.md  # audit report 2
+        ├── v<N>/                          # one directory per iteration (v0 = base, v1+ = mutations)
+        │   ├── context_set_v<N>.json      # ContextSet snapshot at this version
+        │   ├── analysis_v<N>.md           # findings + reasoning + mutations applied
+        │   └── eval/                      # output_dir for context-engineering-evaluate
+        │       ├── eval_configs/          # generated Evalbench YAMLs + converted dataset
         │       │   ├── db_config.yaml
         │       │   ├── model_config.yaml
         │       │   ├── run_config.yaml
@@ -36,21 +36,21 @@ The hill-climbing skill maintains an internal workspace to track iterations, eva
         │       └── eval_reports/<job_id>/
         │           ├── scores.csv
         │           └── summary.csv
-        ├── holdout_eval/              # output_dir for the single holdout evaluation (after publish)
-        └── final_evaluation_report.md # generalizability report (Holdout Evaluation phase)
+        ├── holdout_eval/                  # output_dir for the single holdout evaluation (after publish)
+        └── final_evaluation_report.md     # generalizability report (Holdout Evaluation phase)
 ```
 
-The dataset lives at `<ce_root>` because it describes the database, not an experiment: several experiments (different seeds, loop parameters, or context set ids) evaluate against the same `splits/hillclimb.json` / `splits/holdout.json`, which keeps their scores comparable.
+An experiment is **self-contained and, once `## Generalizability` is written, frozen**. Follow-up work happens in a new experiment that `context-engineering-init` **clones** from the finished one: `dataset/` in full when the fix is to the context (identical splits → comparable verdicts), or only `dataset/golden.json` as a seed when the fix is to the dataset (which is then expanded and re-split). The clone points at the **same `tools.yaml` source** (carried over in `## Active Database`; the shared `tools.yaml` is never copied). The published context set of the finished experiment becomes the clone's `Seed resource` and is never overwritten.
 
 ## `state.md` format
 
 `state.md` is the single source of truth for the experiment. `context-engineering-init` creates it with the first two sections; later phases append to it. It must contain:
 
-- **Metadata** (init) — experiment name, workspace root, DB source (from `tools.yaml`), enrichment sources, the Context Store coordinates `project_id`, `location`, `context_set_id`, whether the user pre-approved draft uploads, and the loop parameters (tuning target, plateau k, max iterations). From the coordinates, the final resource is `projects/<project_id>/locations/<location>/contextSets/<context_set_id>` and the single working copy the loop overwrites every iteration is `projects/<project_id>/locations/<location>/contextSets/<context_set_id>_draft`. If `v0` is seeded from a user-supplied existing resource, record that resource name under `Seed resource` so it is never treated as a draft. Dataset paths point at `<ce_root>` (`.context-engineering/golden.json`, `.context-engineering/splits/…`) and are filled in by `context-engineering-dataset-generation`; if the splits already exist when init runs (a second experiment on the same DB), init records them directly.
-- **Active Database** (init; expanded by dataset-generation) — source name, type, and `**Graph Ids**` for Spanner GoogleSQL property graphs. `generate_evalbench_configs` reads `**Graph Ids**` from this file to scope Spanner Graph evaluations.
+- **Metadata** (init) — experiment name, workspace root, DB source (one of the sources in the shared `.context-engineering/tools.yaml`), enrichment sources, the Context Store coordinates `project_id`, `location`, `context_set_id`, whether the user pre-approved draft uploads, and the loop parameters (tuning target, plateau k, max iterations). From the coordinates, the final resource is `projects/<project_id>/locations/<location>/contextSets/<context_set_id>` and the single working copy the loop overwrites every iteration is `projects/<project_id>/locations/<location>/contextSets/<context_set_id>_draft`. If `v0` is seeded from a user-supplied existing resource, record that resource name under `Seed resource` so it is never treated as a draft. For a cloned experiment, record `Cloned from: <source experiment> (context fixes | dataset expansion)`. Dataset paths point inside the experiment (`dataset/golden.json`, `dataset/splits/…`) and are filled in by `context-engineering-dataset-generation`; when init cloned `dataset/` in full, init records them directly.
+- **Active Database** (init; expanded by dataset-generation) — **which `tools.yaml` source this experiment uses**: `**Config**` (always `./.context-engineering/tools.yaml`), `**Source Name**`, `**Type**`, `**Tools**` (the exact tool names declared for that source), and `**Graph Ids**` for Spanner GoogleSQL property graphs. Downstream skills take the source from here rather than guessing from a multi-source `tools.yaml`; `generate_evalbench_configs` reads `**Graph Ids**` from this file to scope Spanner Graph evaluations.
 - **Iteration Log** (hillclimb) — one entry per completed iteration, in order. Each entry records the local file, the score, and the working-copy upload operation name.
 - **Final** (hillclimb) — written once by the Finalize step, together with the working-copy delete operation.
-- **Generalizability** (holdout phase) — holdout score, verdict, and triage path.
+- **Generalizability** (holdout phase) — holdout score, verdict, and triage path. Its presence marks the experiment as finished and read-only.
 
 Example:
 
@@ -67,18 +67,21 @@ Example:
 - Final resource: projects/my-project/locations/us-central1/contextSets/my-exp-1
 - Draft resource: projects/my-project/locations/us-central1/contextSets/my-exp-1_draft
 - Seed resource: (none — seeded from bootstrap)
+- Cloned from: (none)
 - Overwrite acknowledged: yes (bare id did not exist at init)
 - Auto-approve uploads: true
 - Tuning target: 1.0
 - Plateau k: 3
 - Max iterations: 10
-- Golden dataset: ./.context-engineering/golden.json
-- Hillclimb dataset: ./.context-engineering/splits/hillclimb.json
-- Holdout dataset: ./.context-engineering/splits/holdout.json
+- Golden dataset: ./.context-engineering/experiments/my-exp-1/dataset/golden.json
+- Hillclimb dataset: ./.context-engineering/experiments/my-exp-1/dataset/splits/hillclimb.json
+- Holdout dataset: ./.context-engineering/experiments/my-exp-1/dataset/splits/holdout.json
 
 ## Active Database
+- **Config**: ./.context-engineering/tools.yaml
 - **Source Name**: my-alloydb
 - **Type**: alloydb-postgres
+- **Tools**: my-alloydb-list-schemas, my-alloydb-execute-sql
 - **Graph Ids**: []
 
 ## Iteration Log
@@ -141,7 +144,7 @@ On skill invocation with an existing workspace:
    3. Re-run iteration `M` from step 1, seeding from `v(M-1)/context_set_v(M-1).json` on disk.
 4. **Check for `## Finalizing: vK`.** If present, finalize was interrupted. Re-run the Finalize step from `vK/context_set_vK.json` (the re-upload is unconditional — do not try to infer what the server holds) and poll until `done: true`. No re-confirmation is needed: the overwrite was acknowledged in init.
 5. If `## Final:` is present without `## Generalizability`, run the **Holdout Evaluation & Generalization Reporting Phase** (workflow skill) against the final resource, then stop.
-6. If `## Final:` and `## Generalizability` are both present, report them and stop — the run is complete.
+6. If `## Final:` and `## Generalizability` are both present, the experiment is **finished and read-only**: do not add iterations, uploads, or dataset changes. Report the final resource and verdict, re-print the *Next experiment hand-off* card from `context-engineering-workflow` (clone scope per the verdict), and stop. If the user wants to improve further, route to `context-engineering-init` in clone mode.
 7. If `## Converged` is present without `## Final:`, run the Finalize step — do not start another iteration.
 8. If `## User Stop` is present without `## Final:`, ask once whether to continue the loop or publish `best_version` now; do not publish on your own.
 9. Otherwise, start iteration `N+1`. Check the stopping conditions first — a resume after `Max iterations` must not add an iteration.

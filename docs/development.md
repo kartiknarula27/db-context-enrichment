@@ -11,7 +11,7 @@ Every manifest declares three MCP servers:
 | Key | What | Transport |
 | :--- | :--- | :--- |
 | `db-context-engineering` (`mcp_db_context_engineering` in `plugin/gemini-extension.json`) | This repo's Python server (`main.py`): dataset generation/splitting, Evalbench config generation, `mutate_context_set`, `validate_context_set`, `read_evaluation_result`. | stdio (`uvx` / `uv run`) |
-| `toolbox` | MCP Toolbox for Databases, reading `.context-engineering/tools.yaml`. | stdio (`uvx`) |
+| `toolbox` | MCP Toolbox for Databases. Reads the single shared `.context-engineering/tools.yaml` (one file for all experiments; it may hold several sources — each experiment records the source/tools it uses in its `state.md`). The client starts Toolbox with a fixed `--config`, so **any edit to `tools.yaml` requires restarting the `toolbox` MCP server** (or the client) before the new sources/tools are visible. | stdio (`uvx`) |
 | `contextmgmt` | The **remote OneMCP Context Store server** (Dataplex): `list_context_set_locations`, `upload_context_set`, `get_context_set`, `delete_context_set`, `get_operation`. | Streamable HTTP, Google-credentials auth |
 
 ### Context Store (`contextmgmt`)

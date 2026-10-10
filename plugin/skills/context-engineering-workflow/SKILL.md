@@ -53,8 +53,9 @@ Generalizability Report]
 
 If you're new, invoke the peer that matches your current state:
 
-*   No `.context-engineering/tools.yaml`, or no `state.md` for the experiment at `.context-engineering/experiments/<experiment_name>/` → [context-engineering-init](../context-engineering-init/SKILL.md)
-*   No golden dataset → [context-engineering-dataset-generation](../context-engineering-dataset-generation/SKILL.md)
+*   No experiment workspace yet, or `.context-engineering/experiments/<experiment_name>/` is missing `tools.yaml` or `state.md` → [context-engineering-init](../context-engineering-init/SKILL.md)
+*   Finished experiment (`state.md` has `## Generalizability`) and you want to improve further → [context-engineering-init](../context-engineering-init/SKILL.md) in **clone mode** (see *Next experiment hand-off*); never hill-climb a finished experiment again
+*   No golden dataset (`dataset/golden.json` missing in the experiment) → [context-engineering-dataset-generation](../context-engineering-dataset-generation/SKILL.md)
 *   No base ContextSet → [context-engineering-bootstrap](../context-engineering-bootstrap/SKILL.md)
 *   Have a base ContextSet and want autonomous improvement → [context-engineering-hillclimb](../context-engineering-hillclimb/SKILL.md)
 *   Have a ContextSet and just want to score it → [context-engineering-evaluate](../context-engineering-evaluate/SKILL.md)
@@ -137,7 +138,7 @@ A `delete_context_set` that fails with NOT_FOUND is treated as success. This mat
 
 ### Setup & Connection Configuration
 *   **Reference**: [context-engineering-init](../context-engineering-init/SKILL.md)
-*   **Goal**: Configure `.context-engineering/tools.yaml` for the Toolbox MCP server, verify runtime + GCP setup (uv, evalbench, ADC, Dataplex/GDA APIs, IAM), and write the experiment `state.md` at `.context-engineering/experiments/<experiment_name>/state.md`. Its `## Metadata` records the Context Store coordinates (`Project`, `Location`, `Context set id`, `Final resource`, `Draft resource`, optional `Seed resource`), `Overwrite acknowledged`, `Auto-approve uploads`, the loop parameters (`Tuning target`, `Plateau k`, `Max iterations`), and enrichment sources; its `## Active Database` records the Toolbox source name, type and (for Spanner Graph) `Graph Ids`. Downstream peers read these values instead of re-asking.
+*   **Goal**: Ensure the shared `.context-engineering/tools.yaml` exists for the Toolbox MCP server (one file per workspace; it may hold several DB sources; it is **never** copied into an experiment), verify runtime + GCP setup (uv, evalbench, ADC, Dataplex/GDA APIs, IAM), and create the experiment workspace `.context-engineering/experiments/<experiment_name>/` with its `state.md` (and later `dataset/`). `state.md`'s `## Metadata` records the Context Store coordinates (`Project`, `Location`, `Context set id`, `Final resource`, `Draft resource`, optional `Seed resource`), `Overwrite acknowledged`, `Auto-approve uploads`, the loop parameters (`Tuning target`, `Plateau k`, `Max iterations`), enrichment sources, and — for follow-up experiments — `Cloned from`; its `## Active Database` records **which `tools.yaml` source this experiment uses** (source name, type, tool names, and for Spanner Graph `Graph Ids`). Downstream peers read these values instead of re-asking. Every change to `tools.yaml` — by a skill or by the user — ends with an explicit reminder to **restart the `toolbox` MCP server**, which reads the file only at startup. Init can also **clone** a finished experiment (copying its `dataset/` in full or just `golden.json`, depending on the verdict) — see *Next experiment hand-off* below.
 
 ---
 
@@ -164,7 +165,7 @@ As the master orchestrator, this skill strictly governs phase transitions after 
 ### Evaluation Dataset Prep & Stratified Partitioning
 *   **Reference**: [context-engineering-dataset-generation](../context-engineering-dataset-generation/SKILL.md)
 *   **Requires**: Setup & Connection Configuration complete.
-*   **Goal**: Build a high-quality "golden" ground-truth dataset at `.context-engineering/golden.json` and partition it into `.context-engineering/splits/hillclimb.json` (Hillclimbing Questions) and `.context-engineering/splits/holdout.json` (Holdout Variations) using the `split_dataset` MCP tool, strictly enforcing that every normalized SQL template (key) in `splits/holdout.json` is included in `splits/hillclimb.json`. These three files live at the **DB level** (next to `tools.yaml`), not inside an experiment: every experiment on the same connection evaluates against the same splits, so their scores stay comparable. The skill's working files (plan, environment report, interim dataset, audit reports) live in `.context-engineering/dataset/` — never in the current working directory. Each experiment's `state.md` records the dataset paths under `## Metadata`.
+*   **Goal**: Build a high-quality "golden" ground-truth dataset at `.context-engineering/experiments/<experiment_name>/dataset/golden.json` and partition it into `dataset/splits/hillclimb.json` (Hillclimbing Questions) and `dataset/splits/holdout.json` (Holdout Variations) using the `split_dataset` MCP tool, strictly enforcing that every normalized SQL template (key) in `splits/holdout.json` is included in `splits/hillclimb.json`. The whole `dataset/` directory — golden set, splits, and the skill's working files (plan, environment report, interim dataset, audit reports) — lives **inside the experiment**; nothing is written to the current working directory. Follow-up experiments that must stay comparable with a finished one receive a **copy** of its `dataset/` via the init clone flow (`split_dataset` is deterministic, so copied splits are reproducible). Each experiment's `state.md` records the dataset paths under `## Metadata`.
 *   **Mandatory Stratified Split Enforcement (`split_dataset`)**:
     *   **Always Use `split_dataset` MCP Tool**: You MUST invoke the `split_dataset` MCP tool to generate `splits/hillclimb.json` and `splits/holdout.json` (for both newly generated datasets and user-supplied datasets). You are **strictly forbidden** from manually slicing or partitioning dataset JSON files via custom Python scripts or shell commands.
     *   **Holdout-in-Hillclimb SQL Template Invariant**: Every normalized SQL template (key) in `splits/holdout.json` **MUST** be included in `splits/hillclimb.json` (`holdout_keys <= hillclimb_keys`). Single-variation SQL templates (appearing only once in the golden dataset) are placed exclusively in `splits/hillclimb.json` and never in `splits/holdout.json`.
@@ -207,13 +208,13 @@ As the master orchestrator, this skill strictly governs phase transitions after 
 *   **Zero-Leakage Invariant**: The holdout partition (`splits/holdout.json`) is strictly isolated during the entire hill-climbing optimization loop (zero data leakage). It must never be accessed for gap analysis, candidate selection, error harvesting, or context mutation. It is evaluated strictly once at workflow conclusion.
 *   **Entry Prerequisites**:
     *   [ ] **Published**: `state.md` contains `## Final: <final resource> (from vK, score <S>)` — the best iteration is live under the bare `<context_set_id>` and `_draft` has been deleted.
-    *   [ ] **Holdout Precondition Met**: `.context-engineering/splits/holdout.json` (the `Holdout dataset` recorded in `state.md`) exists. It always does when the dataset came through `context-engineering-dataset-generation` (the split is mandatory); if it is missing, stop and route to that skill — do not report a verdict without it.
+    *   [ ] **Holdout Precondition Met**: `.context-engineering/experiments/<experiment_name>/dataset/splits/holdout.json` (the `Holdout dataset` recorded in `state.md`) exists. It always does when the dataset came through `context-engineering-dataset-generation` (the split is mandatory); if it is missing, stop and route to that skill — do not report a verdict without it.
 
 #### Workflow & Execution Steps
 
 1.  **Single Read-Only Holdout Evaluation (Autonomous Zero-Prompt Execution)**:
-    *   **Do NOT Prompt or Ask Permission**: Reuse `experiment_name`, `toolbox_config_path` (`.context-engineering/tools.yaml`), `toolbox_source_name` (from `## Active Database` in `state.md`), and the **published** `context_set_id` (`Final resource` in `state.md`, i.e. `projects/<project_id>/locations/<location>/contextSets/<context_set_id>`) without asking the user for any parameters or confirmation.
-    *   **Generate Holdout Evalbench Configs**: Immediately call the `generate_evalbench_configs` MCP tool with `output_dir=".context-engineering/experiments/<experiment_name>/holdout_eval/"`, `dataset_path=".context-engineering/splits/holdout.json"`, and the reused `context_set_id`, `toolbox_config_path`, and `toolbox_source_name`.
+    *   **Do NOT Prompt or Ask Permission**: Reuse `experiment_name`, `toolbox_config_path` (`.context-engineering/tools.yaml`), `toolbox_source_name` (**Source Name** from `## Active Database` in `state.md`), and the **published** `context_set_id` (`Final resource` in `state.md`, i.e. `projects/<project_id>/locations/<location>/contextSets/<context_set_id>`) without asking the user for any parameters or confirmation.
+    *   **Generate Holdout Evalbench Configs**: Immediately call the `generate_evalbench_configs` MCP tool with `output_dir=".context-engineering/experiments/<experiment_name>/holdout_eval/"`, `dataset_path=".context-engineering/experiments/<experiment_name>/dataset/splits/holdout.json"`, and the reused `context_set_id`, `toolbox_config_path`, and `toolbox_source_name`.
     *   **Run Holdout Evaluation**: Immediately execute the canonical Evalbench command:
         `uvx google-evalbench@1.17.0 --experiment_config=.context-engineering/experiments/<experiment_name>/holdout_eval/eval_configs/run_config.yaml`
     *   **Extract Scores**: Extract `test_passed` and `test_total` from `holdout_eval/eval_reports/<job_id>/summary.csv`, and retrieve `dev_passed` and `dev_total` from the published iteration's (`vK`) entry in the `state.md` Iteration Log.
@@ -304,15 +305,42 @@ As the master orchestrator, this skill strictly governs phase transitions after 
         *   `4. STATISTICAL DETAILS`: Two-proportion pooled z-test, sample sizes ($N_{\text{dev}}, x_{\text{dev}}, N_{\text{test}}, x_{\text{test}}$), pooled proportion ($\hat{p}$), standard error ($SE$), test statistic ($z$), two-tailed $p$-value, and power analysis check placed at the bottom.
 
 5.  **Log State Tracking (`state.md`)**:
-    *   Append a `## Generalizability` section to `.context-engineering/experiments/<experiment_name>/state.md` recording the holdout evaluation path (`holdout_eval/eval_reports/<job_id>/`), holdout score (`passed / total`), the verdict (`PASS`, `INVESTIGATE`, or `INCONCLUSIVE`), and the report path. See the example in `context-engineering-hillclimb/references/workspace.md`.
+    *   Append a `## Generalizability` section to `.context-engineering/experiments/<experiment_name>/state.md` recording the holdout evaluation path (`holdout_eval/eval_reports/<job_id>/`), holdout score (`passed / total`), the verdict (`PASS`, `INVESTIGATE`, or `INCONCLUSIVE`), and the report path. See the example in `context-engineering-hillclimb/references/workspace.md`. From this point the experiment is **finished and read-only**: no further iterations, uploads, or dataset edits happen inside it.
+
+6.  **Next Experiment Hand-off (mandatory, same turn, printed verbatim after the On-Screen Card)**:
+    *   **Why**: a finished experiment is the frozen record of one run. Applying the report's recommendations *inside* it would overwrite the published context set and make the before/after scores incomparable. Every follow-up therefore happens in a **new experiment cloned from this one**.
+    *   **Clone scope depends on the verdict** (tell the user which applies):
+        | Verdict / path | What the clone copies | Why |
+        | :--- | :--- | :--- |
+        | **INVESTIGATE — Path A** (context gaps: facets / value searches / templates) | the **whole `dataset/`** (golden set, splits, plan, audit reports) | the dataset is fine; identical splits keep the new verdict comparable with this one |
+        | **INVESTIGATE — Path B** (phrasing diversity) and **INCONCLUSIVE** (dataset too small) | **`dataset/golden.json` only**, as the seed for expansion | the dataset itself must change; the dataset skill regenerates plan, reports and splits in the new experiment |
+        | **PASS** | nothing to do — the published context set is production-ready; offer the Path A clone only if the user wants to push accuracy further | — |
+    *   **Seed**: the new experiment starts from this experiment's **published** context set (`Final resource` → `Seed resource` of the clone; read once with `get_context_set`, never overwritten). Its own `Context set id` defaults to the new experiment name, so this experiment's published set stays intact. The clone uses the **same `tools.yaml` source** (`## Active Database` is carried over; `tools.yaml` itself is shared and is not copied).
+    *   **Print this card** (fill every placeholder; keep the prompt on one line so it can be copy-pasted):
+        ```markdown
+        ### Next step: start a new experiment
+        `<experiment_name>` is complete and frozen (published: `<Final resource>`, verdict: **<VERDICT>**).
+        Do not hill-climb it again — apply the recommendations in a **new experiment** so the two runs stay comparable.
+
+        The new experiment will be cloned from this one:
+        * database → same `tools.yaml` source: `<Source Name>` (no connection setup needed)
+        * `dataset/` → <"copied in full (identical holdout, comparable verdicts)" | "only `golden.json` is copied as the seed; the dataset will be expanded first">
+        * seed context set → `<Final resource>`
+        * first action → <one-line recommendation from the report>
+
+        Start it with:
+        "Start a new context-engineering experiment named `<experiment_name>-v2`, cloned from `<experiment_name>` for <"context fixes" | "dataset expansion">, seeded from its published context set, and apply the recommendations in `.context-engineering/experiments/<experiment_name>/final_evaluation_report.md`."
+        ```
+    *   The clone itself is performed by [context-engineering-init](../context-engineering-init/SKILL.md) (clone mode) when the user issues that prompt — do **not** copy files or create the new experiment from this phase.
 
 #### Generalizability Diagnosis & Triage
 
-When a user provides a `final_evaluation_report.md` from a Generalizability Test, the agent must inspect the final **Verdict** and triage the failures to determine the correct re-optimization path.
+When a user asks to act on a `final_evaluation_report.md` (typically with the hand-off prompt above), the agent inspects the final **Verdict** and routes remediation. **All remediation happens in the new, cloned experiment**: if the current experiment is the finished one (`## Generalizability` present in its `state.md`), first route to [context-engineering-init](../context-engineering-init/SKILL.md) in clone mode with the scope from the table above, then continue below inside the new experiment.
 
 ##### 1. Verdict: INCONCLUSIVE
 *   **Trigger:** The report indicates an INCONCLUSIVE verdict. This means the dataset is either too small or lacks the necessary variations to yield a statistically significant measure of generalizability.
-*   **Action:** Route immediately to [context-engineering-dataset-generation](../context-engineering-dataset-generation/SKILL.md). Execute the expansion workflow to scale up the dataset using template-preserving strategies until it meets the required volume and variation thresholds. Once expanded, restart the context engineering lifecycle.
+*   **Clone scope:** `dataset/golden.json` only.
+*   **Action:** Route to [context-engineering-dataset-generation](../context-engineering-dataset-generation/SKILL.md) inside the new experiment, treating the copied `golden.json` as the user-supplied seed. Execute the expansion workflow to scale up the dataset using template-preserving strategies until it meets the required volume and variation thresholds, re-split, then run `context-engineering-hillclimb` seeded from the previous experiment's published context set.
 
 ##### 2. Verdict: INVESTIGATE
 When the verdict is INVESTIGATE, the model suffered a statistically significant generalization drop.
@@ -323,17 +351,19 @@ When the verdict is INVESTIGATE, the model suffered a statistically significant 
 Read the report's actionable recommendations and route to the corresponding skill:
 *   **Path A: Context & Metadata Deficiencies (Value Linking / Business Rule Gaps)**
     *   **Trigger:** Failures stem from a missing structural bridge between the user's intent and the database schema. This includes unmapped terminology, failure to link fuzzy search strings to strict database enums/IDs, or omitted table joins and filters.
-    *   **Action:** The dataset is fine; the gap is in the ContextSet's metadata. Route to [context-engineering-generation-guide](../context-engineering-generation-guide/SKILL.md). Author universally applicable `Value Searches` (for fuzzy logic) or parameterized `Facets` (for business filters) that bridge the missing logic. Apply via `mutate_context_set`, then restart `context-engineering-hillclimb` on the existing dataset.
+    *   **Clone scope:** the whole `dataset/` (identical splits → comparable verdicts).
+    *   **Action:** The dataset is fine; the gap is in the ContextSet's metadata. In the new experiment, seed `v0` from the previous published context set, route to [context-engineering-generation-guide](../context-engineering-generation-guide/SKILL.md) to author universally applicable `Value Searches` (for fuzzy logic) or parameterized `Facets` (for business filters) that bridge the missing logic, apply them to `v0/context_set_v0.json` via `mutate_context_set`, then run `context-engineering-hillclimb` on the copied dataset.
 *   **Path B: Curriculum Deficiencies (Phrasing Diversity Gaps)**
     *   **Trigger:** Failures stem from unseen concepts, colloquialisms, shorthand, or linguistic structures that the model was never exposed to within the training dataset.
-    *   **Action:** Direct context patching is forbidden as it causes overfitting. Route to [context-engineering-dataset-generation](../context-engineering-dataset-generation/SKILL.md) to execute the expansion workflow. Generate new, diverse question/SQL pairs that teach the missing vocabulary and append them to the training split (`hillclimb.json`). Finally, restart `context-engineering-hillclimb` so the loop can learn the newly expanded curriculum.
+    *   **Clone scope:** `dataset/golden.json` only.
+    *   **Action:** Direct context patching is forbidden as it causes overfitting. In the new experiment, route to [context-engineering-dataset-generation](../context-engineering-dataset-generation/SKILL.md) to execute the expansion workflow on the copied `golden.json`: generate new, diverse question/SQL pairs that teach the missing vocabulary, re-split (`dataset/splits/hillclimb.json` / `holdout.json`), then run `context-engineering-hillclimb` seeded from the previous published context set so the loop can learn the newly expanded curriculum.
 
 ---
 
 ## Safety & Protocol
 
 *   **Unconfigured Database & MCP Tool Probing**:
-    *   Before calling any database MCP tools (such as `<source>-list-schemas`, `<source>-list-graphs`, `<source>-execute-sql`), verify whether `.context-engineering/tools.yaml` exists and is configured.
+    *   Before calling any database MCP tools (such as `<source>-list-schemas`, `<source>-list-graphs`, `<source>-execute-sql`), verify that `.context-engineering/tools.yaml` exists and is configured, and — inside an experiment — that the **Source Name** recorded under `## Active Database` in `state.md` is one of its sources and that its `<source>-*` tools are visible in your tool list. If the source is in the file but its tools are not visible, the `toolbox` MCP server is stale (it reads `tools.yaml` only at startup): **tell the user to restart it** (Gemini CLI `/mcp reload`; Claude Code `/mcp` → `toolbox` → Reconnect; Antigravity `/mcp` → `toolbox` → Restart) before continuing.
     *   **Strictly Forbidden**: If `.context-engineering/tools.yaml` is missing or unverified, you are **strictly forbidden from proceeding**.
     *   **Mandatory Action**: You **MUST immediately halt and yield the turn** to solicit the database connection parameters (Project ID, Instance ID, Database ID, Dialect [for Spanner: GoogleSQL vs. PostgreSQL], and any target tables/property graphs) and an experiment name from the user. Do not proceed on the workflow until the user provides this information.
 
